@@ -1,3 +1,11 @@
 output/
 __pycache__/
 *.pyc
+
+# Xcode
+Recast/Recast.xcodeproj/
+Recast/build/
+*.xcworkspace
+xcuserdata/
+DerivedData/
+.build/

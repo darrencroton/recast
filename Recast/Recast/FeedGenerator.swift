@@ -1,0 +1,79 @@
+import Foundation
+
+enum FeedGenerator {
+    static func write(episodes: [Episode], channels: [Channel], baseURL: String, to outputDir: URL) {
+        let now = rfc2822(Date())
+        let channelNames = channels.map(\.name).joined(separator: ", ")
+
+        var items = ""
+        for ep in episodes {
+            guard let fileName = ep.fileName else { continue }
+            let filePath = Paths.episodesDir(in: outputDir).appendingPathComponent(fileName)
+            let fileSize = (try? FileManager.default.attributesOfItem(atPath: filePath.path)[.size] as? Int) ?? 0
+            let channelName = channels.first(where: { $0.id == ep.channelID })?.name ?? "Unknown"
+
+            items += """
+
+                <item>
+                  <title>\(xmlEscape(ep.title))</title>
+                  <description>\(xmlEscape("From \(channelName). Watch: https://www.youtube.com/watch?v=\(ep.videoID)"))</description>
+                  <enclosure url="\(xmlEscape(baseURL))/episodes/\(xmlEscape(fileName))" length="\(fileSize)" type="audio/mpeg"/>
+                  <guid isPermaLink="false">\(ep.videoID)</guid>
+                  <pubDate>\(rfc2822(ep.publishDate))</pubDate>
+                  <itunes:duration>\(formatDuration(ep.durationSeconds))</itunes:duration>
+                  <itunes:author>\(xmlEscape(channelName))</itunes:author>
+                  <link>https://www.youtube.com/watch?v=\(ep.videoID)</link>
+                </item>
+            """
+        }
+
+        let feed = """
+        <?xml version="1.0" encoding="UTF-8"?>
+        <rss version="2.0"
+             xmlns:itunes="http://www.itunes.com/dtds/podcast-1.0.dtd"
+             xmlns:atom="http://www.w3.org/2005/Atom">
+          <channel>
+            <title>Recast</title>
+            <description>\(xmlEscape("YouTube talks collected with Recast. Sources: \(channelNames)"))</description>
+            <link>https://github.com</link>
+            <language>en</language>
+            <lastBuildDate>\(now)</lastBuildDate>
+            <atom:link href="\(xmlEscape(baseURL))/feed.xml" rel="self" type="application/rss+xml"/>
+            <itunes:author>Recast</itunes:author>
+            <itunes:category text="Science"/>
+            <itunes:explicit>false</itunes:explicit>
+        \(items)
+          </channel>
+        </rss>
+        """
+
+        let feedURL = outputDir.appendingPathComponent("feed.xml")
+        try? FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
+        try? feed.write(to: feedURL, atomically: true, encoding: .utf8)
+    }
+
+    // MARK: - Helpers
+
+    private static func xmlEscape(_ s: String) -> String {
+        s.replacingOccurrences(of: "&", with: "&amp;")
+         .replacingOccurrences(of: "<", with: "&lt;")
+         .replacingOccurrences(of: ">", with: "&gt;")
+         .replacingOccurrences(of: "\"", with: "&quot;")
+         .replacingOccurrences(of: "'", with: "&apos;")
+    }
+
+    private static func rfc2822(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
+        f.timeZone = TimeZone(secondsFromGMT: 0)
+        return f.string(from: date)
+    }
+
+    private static func formatDuration(_ seconds: Int) -> String {
+        let h = seconds / 3600
+        let m = (seconds % 3600) / 60
+        let s = seconds % 60
+        return String(format: "%02d:%02d:%02d", h, m, s)
+    }
+}

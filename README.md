@@ -1,76 +1,67 @@
-# Cosmic AI Podcast Tool
+# Recast
 
-Automatically downloads talks from the [NSF-Simons Cosmic AI](https://cosmicai.org) YouTube channel and generates a podcast RSS feed you can subscribe to on your phone.
+A native macOS app that turns YouTube channels into a podcast feed. Add channels, fetch new talks, and subscribe in any podcast app on your phone.
 
-## Setup
-
-**Requirements:** Python 3.10+, ffmpeg
+## Quick Start
 
 ```bash
-# Install Python dependency
-pip install -r requirements.txt
-
-# Install ffmpeg (if not already installed)
-# macOS:
-brew install ffmpeg
-# Ubuntu/Debian:
-sudo apt install ffmpeg
-# Windows:
-winget install ffmpeg
+cd Recast
+./setup.sh
 ```
 
-## Usage
+This generates the Xcode project and opens it. Press **Cmd+R** to build and run.
 
-```bash
-# Download latest talks and generate the podcast feed
-python cosmic_podcast.py
-
-# Only grab the 5 most recent talks
-python cosmic_podcast.py --max 5
-
-# Download and immediately start serving the feed
-python cosmic_podcast.py --serve
-
-# Use a custom port
-python cosmic_podcast.py --serve --port 9000
-```
-
-## Subscribe on Your Phone
-
-1. Run with `--serve` to start the podcast server
-2. Find your computer's local IP (e.g. `192.168.1.100`)
-3. Add `http://192.168.1.100:8888/feed.xml` to your podcast app:
-   - **iOS:** Apple Podcasts > Library > Edit > Add a Show by URL
-   - **Android:** Pocket Casts > Search > "Add by URL" / AntennaPod > + > Add podcast > RSS URL
-4. Episodes will appear as a regular podcast
-
-## Hosting Publicly
-
-To make the feed available outside your local network, you can:
-
-- **ngrok:** `ngrok http 8888` then use the generated URL as `--base-url`
-- **Cloud server:** Copy the `output/` folder to a web server and set `--base-url` to its public URL
-- **Tailscale:** Access via your Tailscale IP on your phone
-
-```bash
-# Example with a public base URL
-python cosmic_podcast.py --base-url https://my-server.example.com/podcast
-```
+**Requirements:** macOS 14+, Xcode 15+. The app automatically downloads `yt-dlp` and `ffmpeg` on first launch — no terminal setup needed.
 
 ## How It Works
 
-1. Uses `yt-dlp` to list recent videos from the Cosmic AI YouTube channel
-2. Downloads audio as MP3 (skipping already-downloaded episodes)
-3. Generates a standard podcast RSS feed (`feed.xml`)
-4. Optionally serves the feed and audio files over HTTP
+1. **Add channels** — Press `+` and paste a YouTube channel or playlist URL
+2. **Fetch episodes** — Select channels and press the Fetch button to discover and download new talks as MP3
+3. **Subscribe** — Start the built-in podcast server and add the feed URL to your podcast app
 
-Downloaded episodes and feed are stored in the `output/` directory.
+The app generates a standard RSS podcast feed served at `http://localhost:8888/feed.xml`.
 
-## Updating
+## Subscribe on Your Phone
 
-Run the script again to check for new talks. It tracks what's already been downloaded and only fetches new episodes.
+1. Click the server toggle in the toolbar to start serving
+2. Find your Mac's local IP (System Settings > Wi-Fi > Details > IP Address)
+3. Add `http://<your-ip>:8888/feed.xml` to your podcast app:
+   - **iOS:** Apple Podcasts > Library > Edit > Add a Show by URL
+   - **Android:** Pocket Casts > Search > "Add by URL" / AntennaPod > + > Add podcast > RSS URL
+
+## Settings
+
+Open **Recast > Settings** (Cmd+,) to configure:
+- **Episodes folder** — where MP3 files and the feed are stored (default: `~/Music/Recast`)
+- **Server port** — change the HTTP server port
+
+## CLI Alternative
+
+A standalone Python script is also included for quick command-line use:
 
 ```bash
-# Cron job to check for new talks daily at 6 AM
-0 6 * * * cd /path/to/podcast && python cosmic_podcast.py
+pip install -r requirements.txt
+python cosmic_podcast.py --serve
+```
+
+See `cosmic_podcast.py --help` for options.
+
+## Project Structure
+
+```
+Recast/               macOS SwiftUI app
+├── Recast/           Source files
+│   ├── RecastApp.swift
+│   ├── Models.swift
+│   ├── Store.swift
+│   ├── ContentView.swift
+│   ├── EpisodeListView.swift
+│   ├── AddChannelSheet.swift
+│   ├── SettingsView.swift
+│   ├── Downloader.swift
+│   ├── FeedGenerator.swift
+│   └── PodcastServer.swift
+├── project.yml       XcodeGen config
+└── setup.sh          Generates Xcode project
+cosmic_podcast.py     Standalone CLI tool
 ```
