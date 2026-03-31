@@ -22,6 +22,7 @@ struct Episode: Identifiable, Codable, Hashable {
     var publishDate: Date
     var durationSeconds: Int
     var fileName: String?
+    var isPlayed: Bool
 
     var isDownloaded: Bool { fileName != nil }
 
@@ -32,6 +33,24 @@ struct Episode: Identifiable, Codable, Hashable {
         self.title = title
         self.publishDate = publishDate
         self.durationSeconds = durationSeconds
+        self.isPlayed = false
+    }
+
+    // Backwards-compatible decoding: isPlayed defaults to false if missing
+    enum CodingKeys: String, CodingKey {
+        case id, channelID, videoID, title, publishDate, durationSeconds, fileName, isPlayed
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        channelID = try c.decode(UUID.self, forKey: .channelID)
+        videoID = try c.decode(String.self, forKey: .videoID)
+        title = try c.decode(String.self, forKey: .title)
+        publishDate = try c.decode(Date.self, forKey: .publishDate)
+        durationSeconds = try c.decode(Int.self, forKey: .durationSeconds)
+        fileName = try c.decodeIfPresent(String.self, forKey: .fileName)
+        isPlayed = try c.decodeIfPresent(Bool.self, forKey: .isPlayed) ?? false
     }
 
     var formattedDuration: String {

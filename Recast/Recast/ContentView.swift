@@ -1,15 +1,37 @@
 import SwiftUI
+import CoreImage.CIFilterBuiltins
+
+// MARK: - Sidebar selection model
+
+enum SidebarItem: Hashable {
+    case allEpisodes
+    case channel(UUID)
+}
 
 struct ContentView: View {
     @Environment(AppStore.self) private var store
-    @State private var selectedChannels: Set<UUID> = []
+    @State private var selection: Set<SidebarItem> = []
     @State private var showAddSheet = false
+    @State private var searchQuery = ""
+
+    private var selectedChannelIDs: Set<UUID> {
+        var ids = Set<UUID>()
+        for item in selection {
+            if case .channel(let id) = item { ids.insert(id) }
+        }
+        return ids
+    }
+
+    private var showingAllEpisodes: Bool {
+        selection.contains(.allEpisodes)
+    }
 
     var body: some View {
         if !store.ytDlpReady || !store.ffmpegReady {
             SetupView()
         } else {
             mainContent
+                .onAppear { store.onLaunch() }
         }
     }
 
@@ -20,10 +42,13 @@ struct ContentView: View {
         } detail: {
             detail
         }
+        .searchable(text: $searchQuery, prompt: "Search episodes")
         .toolbar {
             ToolbarItemGroup(placement: .primaryAction) {
                 serverToggle
+                qrCodeButton
                 fetchButton
+                downloadAllButton
                 addButton
             }
         }
@@ -38,7 +63,7 @@ struct ContentView: View {
     // MARK: - Sidebar
 
     private var sidebar: some View {
-        List(selection: $selectedChannels) {
+        List(selection: $selection) {
             if store.channels.isEmpty {
                 ContentUnavailableView {
                     Label("No Channels", systemImage: "antenna.radiowaves.left.and.right")
@@ -47,17 +72,23 @@ struct ContentView: View {
                 }
                 .listRowSeparator(.hidden)
             } else {
-                ForEach(store.channels) { channel in
-                    ChannelRow(channel: channel, episodeCount: store.episodes(for: channel.id).count)
-                        .tag(channel.id)
-                        .contextMenu {
-                            Button("Remove", role: .destructive) {
-                                withAnimation {
-                                    store.removeChannels([channel.id])
-                                    selectedChannels.remove(channel.id)
+                Label("All Episodes", systemImage: "rectangle.stack")
+                    .tag(SidebarItem.allEpisodes)
+                    .badge(store.episodes.count)
+
+                Section("Channels") {
+                    ForEach(store.channels) { channel in
+                        ChannelRow(channel: channel, episodeCount: store.episodes(for: channel.id).count)
+                            .tag(SidebarItem.channel(channel.id))
+                            .contextMenu {
+                                Button("Remove", role: .destructive) {
+                                    withAnimation {
+                                        store.removeChannels([channel.id])
+                                        selection.remove(.channel(channel.id))
+                                    }
                                 }
                             }
-                        }
+                    }
                 }
             }
         }
@@ -69,12 +100,11 @@ struct ContentView: View {
 
     private var detail: some View {
         Group {
-            if selectedChannels.isEmpty && !store.channels.isEmpty {
-                ContentUnavailableView {
-                    Label("Select a Channel", systemImage: "sidebar.left")
-                } description: {
-                    Text("Choose a channel from the sidebar to view episodes.")
-                }
+            if showingAllEpisodes || !selectedChannelIDs.isEmpty {
+                EpisodeListView(
+                    channelIDs: showingAllEpisodes ? Set() : selectedChannelIDs,
+                    searchQuery: searchQuery
+                )
             } else if store.channels.isEmpty {
                 ContentUnavailableView {
                     Label("Get Started", systemImage: "plus.circle")
@@ -82,7 +112,11 @@ struct ContentView: View {
                     Text("Add a YouTube channel to begin downloading episodes.")
                 }
             } else {
-                EpisodeListView(channelIDs: selectedChannels)
+                ContentUnavailableView {
+                    Label("Select a Channel", systemImage: "sidebar.left")
+                } description: {
+                    Text("Choose a channel from the sidebar, or select All Episodes.")
+                }
             }
         }
     }
@@ -101,7 +135,7 @@ struct ContentView: View {
     private var fetchButton: some View {
         Button {
             Task {
-                await store.fetchNewEpisodes(for: selectedChannels)
+                await store.fetchNewEpisodes(for: selectedChannelIDs)
             }
         } label: {
             if store.isFetching {
@@ -112,7 +146,19 @@ struct ContentView: View {
             }
         }
         .disabled(store.channels.isEmpty || store.isFetching)
-        .help(selectedChannels.isEmpty ? "Fetch all channels" : "Fetch selected channels")
+        .help(selectedChannelIDs.isEmpty ? "Check all channels for new episodes" : "Check selected channels for new episodes")
+    }
+
+    private var downloadAllButton: some View {
+        Button {
+            Task {
+                await store.downloadAllNew(for: showingAllEpisodes ? Set() : selectedChannelIDs)
+            }
+        } label: {
+            Label("Download All", systemImage: "arrow.down.to.line")
+        }
+        .disabled(store.channels.isEmpty || !store.activeDownloads.isEmpty)
+        .help("Download all undownloaded episodes")
     }
 
     private var serverToggle: some View {
@@ -125,7 +171,9 @@ struct ContentView: View {
         } label: {
             Label(
                 store.isServerRunning ? "Stop Server" : "Start Server",
-                systemImage: store.isServerRunning ? "antenna.radiowaves.left.and.right.circle.fill" : "antenna.radiowaves.left.and.right.circle"
+                systemImage: store.isServerRunning
+                    ? "antenna.radiowaves.left.and.right.circle.fill"
+                    : "antenna.radiowaves.left.and.right.circle"
             )
         }
         .help(store.isServerRunning
@@ -133,11 +181,25 @@ struct ContentView: View {
               : "Start podcast server on port \(store.serverPort)")
     }
 
+    @State private var showQRPopover = false
+
+    private var qrCodeButton: some View {
+        Button {
+            showQRPopover.toggle()
+        } label: {
+            Label("QR Code", systemImage: "qrcode")
+        }
+        .help("Show feed QR code for your phone")
+        .popover(isPresented: $showQRPopover) {
+            QRCodePopover(feedURL: store.feedURL)
+        }
+    }
+
     // MARK: - Status bar
 
     private var statusBar: some View {
         HStack(spacing: 8) {
-            if store.isFetching {
+            if store.isFetching || !store.activeDownloads.isEmpty {
                 ProgressView()
                     .controlSize(.small)
             }
@@ -150,7 +212,7 @@ struct ContentView: View {
                 Image(systemName: "circle.fill")
                     .font(.system(size: 6))
                     .foregroundStyle(.green)
-                Text("http://localhost:\(store.serverPort)/feed.xml")
+                Text(store.feedURL)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .textSelection(.enabled)
@@ -169,16 +231,86 @@ struct ChannelRow: View {
     let episodeCount: Int
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
-            Text(channel.name)
-                .font(.body)
-                .fontWeight(.medium)
-                .lineLimit(1)
-            Text("\(episodeCount) episode\(episodeCount == 1 ? "" : "s")")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+        HStack(spacing: 10) {
+            ChannelMonogram(name: channel.name)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(channel.name)
+                    .font(.body)
+                    .fontWeight(.medium)
+                    .lineLimit(1)
+                Text("\(episodeCount) episode\(episodeCount == 1 ? "" : "s")")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .padding(.vertical, 2)
+    }
+}
+
+// MARK: - Channel Monogram
+
+struct ChannelMonogram: View {
+    let name: String
+
+    private var initial: String {
+        String(name.prefix(1)).uppercased()
+    }
+
+    private var color: Color {
+        let colors: [Color] = [.red, .orange, .yellow, .green, .mint, .teal, .cyan, .blue, .indigo, .purple, .pink]
+        // Deterministic hash so the colour is stable across launches
+        let hash = name.unicodeScalars.reduce(0) { $0 &+ Int($1.value) }
+        return colors[abs(hash) % colors.count]
+    }
+
+    var body: some View {
+        Text(initial)
+            .font(.system(size: 13, weight: .semibold, design: .rounded))
+            .foregroundStyle(.white)
+            .frame(width: 28, height: 28)
+            .background(color.gradient, in: Circle())
+    }
+}
+
+// MARK: - QR Code Popover
+
+struct QRCodePopover: View {
+    let feedURL: String
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Text("Scan to Subscribe")
+                .font(.headline)
+
+            if let image = Self.generateQRCode(from: feedURL) {
+                Image(nsImage: image)
+                    .interpolation(.none)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: 200, height: 200)
+            }
+
+            Text(feedURL)
+                .font(.caption.monospaced())
+                .foregroundStyle(.secondary)
+                .textSelection(.enabled)
+
+            Text("Add this URL in your podcast app.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+        }
+        .padding(20)
+    }
+
+    static func generateQRCode(from string: String) -> NSImage? {
+        let context = CIContext()
+        let filter = CIFilter.qrCodeGenerator()
+        filter.message = Data(string.utf8)
+        filter.correctionLevel = "M"
+        guard let output = filter.outputImage else { return nil }
+        let scaled = output.transformed(by: CGAffineTransform(scaleX: 10, y: 10))
+        guard let cgImage = context.createCGImage(scaled, from: scaled.extent) else { return nil }
+        return NSImage(cgImage: cgImage, size: NSSize(width: scaled.extent.width, height: scaled.extent.height))
     }
 }
 

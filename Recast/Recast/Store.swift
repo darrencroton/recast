@@ -12,7 +12,12 @@ final class AppStore {
     var isServerRunning = false
     var isFetching = false
     var statusMessage = "Ready"
-    var activeDownloads: Set<String> = []  // videoIDs currently downloading
+    var activeDownloads: Set<String> = []       // videoIDs currently downloading
+    var downloadProgress: [String: Double] = [:]  // videoID → 0.0…1.0
+
+    // Settings
+    var autoFetchInterval: Int = 0   // hours; 0 = disabled
+    var autoStartServer: Bool = false
 
     // Dependencies
     var ytDlpReady = false
@@ -21,6 +26,7 @@ final class AppStore {
 
     let downloader = Downloader()
     private var server: PodcastServer?
+    private var autoFetchTimer: Timer?
 
     // MARK: - Init
 
@@ -36,6 +42,8 @@ final class AppStore {
         var episodes: [Episode]
         var outputDirectory: String
         var serverPort: Int
+        var autoFetchInterval: Int?
+        var autoStartServer: Bool?
     }
 
     func save() {
@@ -43,7 +51,9 @@ final class AppStore {
             channels: channels,
             episodes: episodes,
             outputDirectory: outputDirectory.path,
-            serverPort: serverPort
+            serverPort: serverPort,
+            autoFetchInterval: autoFetchInterval,
+            autoStartServer: autoStartServer
         )
         if let data = try? JSONEncoder().encode(state) {
             try? data.write(to: Paths.stateFile)
@@ -58,6 +68,15 @@ final class AppStore {
         episodes = state.episodes
         outputDirectory = URL(fileURLWithPath: state.outputDirectory)
         serverPort = state.serverPort
+        autoFetchInterval = state.autoFetchInterval ?? 0
+        autoStartServer = state.autoStartServer ?? false
+    }
+
+    // MARK: - Lifecycle (called from RecastApp.onAppear)
+
+    func onLaunch() {
+        if autoStartServer { startServer() }
+        restartAutoFetchTimer()
     }
 
     // MARK: - Dependency management
@@ -107,14 +126,13 @@ final class AppStore {
         regenerateFeed()
     }
 
-    // MARK: - Fetch & download
+    // MARK: - Fetch (discover only — no downloads)
 
     func fetchNewEpisodes(for channelIDs: Set<UUID>) async {
         guard !isFetching else { return }
         isFetching = true
         let targets = channelIDs.isEmpty ? channels : channels.filter { channelIDs.contains($0.id) }
 
-        let episodesDir = Paths.episodesDir(in: outputDirectory)
         var totalNew = 0
 
         for channel in targets {
@@ -123,12 +141,12 @@ final class AppStore {
                 let videos = try await downloader.listVideos(channelURL: channel.url)
                 let knownIDs = Set(episodes.filter { $0.channelID == channel.id }.map(\.videoID))
 
-                for video in videos where !knownIDs.contains(video.videoID) {
-                    let df = DateFormatter()
-                    df.dateFormat = "yyyy-MM-dd"
-                    let pubDate = df.date(from: video.uploadDate) ?? .now
+                let df = DateFormatter()
+                df.dateFormat = "yyyy-MM-dd"
 
-                    var ep = Episode(
+                for video in videos where !knownIDs.contains(video.videoID) {
+                    let pubDate = df.date(from: video.uploadDate) ?? .now
+                    let ep = Episode(
                         channelID: channel.id,
                         videoID: video.videoID,
                         title: video.title,
@@ -136,32 +154,110 @@ final class AppStore {
                         durationSeconds: video.durationSeconds
                     )
                     episodes.append(ep)
-                    save()
-
-                    statusMessage = "Downloading: \(video.title.prefix(50))…"
-                    activeDownloads.insert(video.videoID)
-                    do {
-                        let fileName = try await downloader.downloadAudio(
-                            videoID: video.videoID, to: episodesDir
-                        )
-                        if let idx = episodes.firstIndex(where: { $0.videoID == video.videoID }) {
-                            episodes[idx].fileName = fileName
-                        }
-                        totalNew += 1
-                    } catch {
-                        statusMessage = "Failed: \(video.title.prefix(40)) — \(error.localizedDescription)"
-                    }
-                    activeDownloads.remove(video.videoID)
-                    save()
+                    totalNew += 1
                 }
             } catch {
                 statusMessage = "Error on \(channel.name): \(error.localizedDescription)"
             }
         }
 
-        regenerateFeed()
-        statusMessage = totalNew > 0 ? "Fetched \(totalNew) new episode(s)" : "No new episodes"
+        save()
+        statusMessage = totalNew > 0 ? "Found \(totalNew) new episode(s)" : "No new episodes"
         isFetching = false
+    }
+
+    // MARK: - Download
+
+    func downloadEpisode(_ episode: Episode) async {
+        guard !activeDownloads.contains(episode.videoID), !episode.isDownloaded else { return }
+        let episodesDir = Paths.episodesDir(in: outputDirectory)
+        let videoID = episode.videoID
+
+        activeDownloads.insert(videoID)
+        downloadProgress[videoID] = 0
+        statusMessage = "Downloading: \(episode.title.prefix(50))…"
+
+        do {
+            let fileName = try await downloader.downloadAudio(
+                videoID: videoID,
+                to: episodesDir
+            ) { [weak self] pct in
+                DispatchQueue.main.async { self?.downloadProgress[videoID] = pct }
+            }
+            if let idx = episodes.firstIndex(where: { $0.videoID == videoID }) {
+                episodes[idx].fileName = fileName
+            }
+            statusMessage = "Downloaded: \(episode.title.prefix(50))"
+        } catch {
+            statusMessage = "Failed: \(episode.title.prefix(40)) — \(error.localizedDescription)"
+        }
+
+        activeDownloads.remove(videoID)
+        downloadProgress.removeValue(forKey: videoID)
+        save()
+        regenerateFeed()
+    }
+
+    func downloadAllNew(for channelIDs: Set<UUID>) async {
+        let targets = episodes.filter { ep in
+            !ep.isDownloaded &&
+            !activeDownloads.contains(ep.videoID) &&
+            (channelIDs.isEmpty || channelIDs.contains(ep.channelID))
+        }.sorted { $0.publishDate > $1.publishDate }
+
+        for episode in targets {
+            await downloadEpisode(episode)
+        }
+    }
+
+    /// Auto-fetch: discover AND download (background behaviour)
+    func autoFetch() async {
+        await fetchNewEpisodes(for: Set())
+        await downloadAllNew(for: Set())
+    }
+
+    // MARK: - Episode management
+
+    func deleteEpisodes(_ ids: Set<UUID>) {
+        let fm = FileManager.default
+        let episodesDir = Paths.episodesDir(in: outputDirectory)
+        for ep in episodes where ids.contains(ep.id) {
+            if let fileName = ep.fileName {
+                let file = episodesDir.appendingPathComponent(fileName)
+                try? fm.removeItem(at: file)
+            }
+        }
+        episodes.removeAll { ids.contains($0.id) }
+        save()
+        regenerateFeed()
+    }
+
+    func togglePlayed(_ episodeID: UUID) {
+        if let idx = episodes.firstIndex(where: { $0.id == episodeID }) {
+            episodes[idx].isPlayed.toggle()
+            save()
+        }
+    }
+
+    func revealInFinder(_ episode: Episode) {
+        guard let fileName = episode.fileName else { return }
+        let path = Paths.episodesDir(in: outputDirectory).appendingPathComponent(fileName)
+        NSWorkspace.shared.activateFileViewerSelecting([path])
+    }
+
+    // MARK: - Filtered episodes (search + channel filter)
+
+    func filteredEpisodes(for channelIDs: Set<UUID>, query: String) -> [Episode] {
+        var result = channelIDs.isEmpty
+            ? episodes
+            : episodes.filter { channelIDs.contains($0.channelID) }
+
+        if !query.isEmpty {
+            let q = query.lowercased()
+            result = result.filter { $0.title.lowercased().contains(q) }
+        }
+
+        return result.sorted { $0.publishDate > $1.publishDate }
     }
 
     // MARK: - Feed
@@ -200,6 +296,48 @@ final class AppStore {
         statusMessage = "Server stopped"
     }
 
+    // MARK: - Auto-fetch timer
+
+    func restartAutoFetchTimer() {
+        autoFetchTimer?.invalidate()
+        autoFetchTimer = nil
+        guard autoFetchInterval > 0 else { return }
+        let interval = TimeInterval(autoFetchInterval * 3600)
+        autoFetchTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
+            guard let self else { return }
+            Task { await self.autoFetch() }
+        }
+    }
+
+    // MARK: - Network helpers
+
+    var localIPAddress: String? {
+        var address: String?
+        var ifaddr: UnsafeMutablePointer<ifaddrs>?
+        guard getifaddrs(&ifaddr) == 0, let first = ifaddr else { return nil }
+        defer { freeifaddrs(first) }
+
+        var ptr: UnsafeMutablePointer<ifaddrs>? = first
+        while let ifa = ptr {
+            defer { ptr = ifa.pointee.ifa_next }
+            let sa = ifa.pointee.ifa_addr.pointee
+            guard sa.sa_family == UInt8(AF_INET) else { continue }
+            let name = String(cString: ifa.pointee.ifa_name)
+            guard name == "en0" || name == "en1" else { continue }
+            var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+            getnameinfo(ifa.pointee.ifa_addr, socklen_t(sa.sa_len),
+                        &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST)
+            address = String(cString: hostname)
+            break
+        }
+        return address
+    }
+
+    var feedURL: String {
+        let host = localIPAddress ?? "localhost"
+        return "http://\(host):\(serverPort)/feed.xml"
+    }
+
     // MARK: - Helpers
 
     func episodes(for channelID: UUID) -> [Episode] {
@@ -207,11 +345,9 @@ final class AppStore {
             .sorted { $0.publishDate > $1.publishDate }
     }
 
-    private func normalizeYouTubeURL(_ url: String) -> String {
+    func normalizeYouTubeURL(_ url: String) -> String {
         var u = url.trimmingCharacters(in: .whitespacesAndNewlines)
-        // Convert mobile URLs to desktop
         u = u.replacingOccurrences(of: "https://m.youtube.com", with: "https://www.youtube.com")
-        // Ensure /videos suffix for channel pages
         if u.contains("/@") && !u.hasSuffix("/videos") && !u.contains("/playlist") {
             u = u.hasSuffix("/") ? u + "videos" : u + "/videos"
         }

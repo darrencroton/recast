@@ -29,3 +29,17 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Recast/Recast.entitlements
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_IDENTITY: "-"
+
+  RecastTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - RecastTests
+    dependencies:
+      - target: Recast
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.recast.app.tests
+        GENERATE_INFOPLIST_FILE: YES
+        TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Recast.app/Contents/MacOS/Recast"
+        BUNDLE_LOADER: "$(TEST_HOST)"
