@@ -143,7 +143,11 @@ actor Downloader {
         return results
     }
 
-    func downloadAudio(videoID: String, to episodesDir: URL) async throws -> String {
+    func downloadAudio(
+        videoID: String,
+        to episodesDir: URL,
+        progress: (@Sendable (Double) -> Void)? = nil
+    ) async throws -> String {
         guard let ytdlp = ytDlpPath() else { throw DownloaderError.dependencyMissing("yt-dlp") }
 
         let fileName = "\(videoID).mp3"
@@ -155,14 +159,18 @@ actor Downloader {
             "--audio-format", "mp3",
             "--audio-quality", "3",
             "--output", episodesDir.appendingPathComponent("%(id)s.%(ext)s").path,
-            "--no-playlist", "--no-warnings",
+            "--no-playlist", "--no-warnings", "--newline",
         ]
         if let ffmpeg = ffmpegPath() {
             args += ["--ffmpeg-location", ffmpeg]
         }
         args.append("https://www.youtube.com/watch?v=\(videoID)")
 
-        _ = try await runProcess(ytdlp, arguments: args)
+        if let progress {
+            try await runProcessWithProgress(ytdlp, arguments: args, onProgress: progress)
+        } else {
+            _ = try await runProcess(ytdlp, arguments: args)
+        }
 
         guard FileManager.default.fileExists(atPath: dest.path) else {
             throw DownloaderError.processError("MP3 file was not created for \(videoID).")
@@ -196,6 +204,61 @@ actor Downloader {
                         continuation.resume(throwing: DownloaderError.processError(errMsg))
                     }
                 } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private func runProcessWithProgress(
+        _ path: String,
+        arguments: [String],
+        onProgress: @Sendable @escaping (Double) -> Void
+    ) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            DispatchQueue.global(qos: .userInitiated).async {
+                let process = Process()
+                process.executableURL = URL(fileURLWithPath: path)
+                process.arguments = arguments
+                let stdout = Pipe()
+                let stderr = Pipe()
+                process.standardOutput = stdout
+                process.standardError = stderr
+
+                var stderrText = ""
+                let progressPattern = try? NSRegularExpression(pattern: #"(\d+\.?\d*)%"#)
+
+                stderr.fileHandleForReading.readabilityHandler = { handle in
+                    let data = handle.availableData
+                    guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
+                    stderrText += text
+                    // Parse download progress percentages from yt-dlp output
+                    if let progressPattern {
+                        for line in text.components(separatedBy: .newlines) {
+                            let range = NSRange(line.startIndex..., in: line)
+                            if let match = progressPattern.firstMatch(in: line, range: range),
+                               let numRange = Range(match.range(at: 1), in: line) {
+                                if let pct = Double(line[numRange]) {
+                                    onProgress(min(pct / 100.0, 1.0))
+                                }
+                            }
+                        }
+                    }
+                }
+
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                    stderr.fileHandleForReading.readabilityHandler = nil
+
+                    if process.terminationStatus == 0 {
+                        continuation.resume(returning: ())
+                    } else {
+                        let msg = stderrText.isEmpty ? "Unknown error" : stderrText
+                        continuation.resume(throwing: DownloaderError.processError(msg))
+                    }
+                } catch {
+                    stderr.fileHandleForReading.readabilityHandler = nil
                     continuation.resume(throwing: error)
                 }
             }

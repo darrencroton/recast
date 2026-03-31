@@ -31,11 +31,29 @@ struct SettingsView: View {
                         store.save()
                     }
 
+                Toggle("Start server when app launches", isOn: $store.autoStartServer)
+                    .onChange(of: store.autoStartServer) {
+                        store.save()
+                    }
+
                 LabeledContent("Feed URL") {
-                    Text("http://localhost:\(store.serverPort)/feed.xml")
+                    Text(store.feedURL)
                         .font(.body.monospaced())
                         .foregroundStyle(.secondary)
                         .textSelection(.enabled)
+                }
+            }
+
+            Section("Automation") {
+                Picker("Check for new episodes", selection: $store.autoFetchInterval) {
+                    Text("Manually").tag(0)
+                    Text("Every 6 hours").tag(6)
+                    Text("Every 12 hours").tag(12)
+                    Text("Every 24 hours").tag(24)
+                }
+                .onChange(of: store.autoFetchInterval) {
+                    store.save()
+                    store.restartAutoFetchTimer()
                 }
             }
 
@@ -53,7 +71,7 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: 500, height: 280)
+        .frame(width: 500, height: 340)
     }
 
     private func chooseOutputDir() {

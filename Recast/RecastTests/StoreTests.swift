@@ -15,6 +15,8 @@ final class StoreTests: XCTestCase {
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try! FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
         store.outputDirectory = tempDir
+        store.channels = []
+        store.episodes = []
     }
 
     override func tearDown() {
@@ -185,6 +187,120 @@ final class StoreTests: XCTestCase {
         store.episodes = []
         store.regenerateFeed()
         let content = try String(contentsOf: tempDir.appendingPathComponent("feed.xml"), encoding: .utf8)
-        XCTAssertTrue(content.contains("localhost:9999"))
+        XCTAssertTrue(content.contains("9999"))
+    }
+
+    // MARK: - filteredEpisodes
+
+    func test_filteredEpisodes_allChannels() {
+        let chID = UUID()
+        store.episodes = (0..<5).map { i in
+            makeEpisode(channelID: chID, videoID: "vid\(i)", daysAgo: i)
+        }
+        let result = store.filteredEpisodes(for: Set(), query: "")
+        XCTAssertEqual(result.count, 5)
+        XCTAssertTrue(result.first!.publishDate >= result.last!.publishDate)
+    }
+
+    func test_filteredEpisodes_singleChannel() {
+        let chA = UUID()
+        let chB = UUID()
+        store.episodes = [
+            makeEpisode(channelID: chA, videoID: "a1"),
+            makeEpisode(channelID: chB, videoID: "b1"),
+        ]
+        let result = store.filteredEpisodes(for: [chA], query: "")
+        XCTAssertEqual(result.count, 1)
+        XCTAssertTrue(result.allSatisfy { $0.channelID == chA })
+    }
+
+    func test_filteredEpisodes_searchQuery() {
+        let chID = UUID()
+        store.episodes = [
+            makeEpisode(channelID: chID, videoID: "match"),
+            makeEpisode(channelID: chID, videoID: "other"),
+        ]
+        let result = store.filteredEpisodes(for: Set(), query: "match")
+        XCTAssertEqual(result.count, 1)
+    }
+
+    func test_filteredEpisodes_caseInsensitiveSearch() {
+        let chID = UUID()
+        store.episodes = [makeEpisode(channelID: chID, videoID: "MyVideo")]
+        let result = store.filteredEpisodes(for: Set(), query: "myvideo")
+        XCTAssertEqual(result.count, 1)
+    }
+
+    func test_filteredEpisodes_noMatch() {
+        let chID = UUID()
+        store.episodes = [makeEpisode(channelID: chID, videoID: "something")]
+        let result = store.filteredEpisodes(for: Set(), query: "nonexistent")
+        XCTAssertTrue(result.isEmpty)
+    }
+
+    // MARK: - togglePlayed
+
+    func test_togglePlayed() {
+        let chID = UUID()
+        let ep = makeEpisode(channelID: chID, videoID: "v1", fileName: "v1.mp3")
+        store.episodes = [ep]
+        XCTAssertFalse(store.episodes[0].isPlayed)
+
+        store.togglePlayed(ep.id)
+        XCTAssertTrue(store.episodes[0].isPlayed)
+
+        store.togglePlayed(ep.id)
+        XCTAssertFalse(store.episodes[0].isPlayed)
+    }
+
+    // MARK: - deleteEpisodes
+
+    func test_deleteEpisodes_removesFromList() {
+        let chID = UUID()
+        let ep1 = makeEpisode(channelID: chID, videoID: "v1")
+        let ep2 = makeEpisode(channelID: chID, videoID: "v2")
+        store.episodes = [ep1, ep2]
+        store.deleteEpisodes([ep1.id])
+        XCTAssertEqual(store.episodes.count, 1)
+        XCTAssertEqual(store.episodes[0].videoID, "v2")
+    }
+
+    func test_deleteEpisodes_removesMP3File() throws {
+        let chID = UUID()
+        let ep = makeEpisode(channelID: chID, videoID: "v1", fileName: "v1.mp3")
+        store.episodes = [ep]
+        let episodesDir = Paths.episodesDir(in: tempDir)
+        let mp3Path = episodesDir.appendingPathComponent("v1.mp3")
+        try Data("fake".utf8).write(to: mp3Path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: mp3Path.path))
+
+        store.deleteEpisodes([ep.id])
+        XCTAssertFalse(FileManager.default.fileExists(atPath: mp3Path.path))
+    }
+
+    // MARK: - removeChannels
+
+    func test_removeChannels_removesEpisodes() {
+        let ch = makeChannel()
+        store.channels = [ch]
+        store.episodes = [makeEpisode(channelID: ch.id, videoID: "v1")]
+        store.removeChannels([ch.id])
+        XCTAssertTrue(store.channels.isEmpty)
+        XCTAssertTrue(store.episodes.isEmpty)
+    }
+
+    // MARK: - feedURL
+
+    func test_feedURL_containsPort() {
+        store.serverPort = 9999
+        XCTAssertTrue(store.feedURL.contains("9999"))
+        XCTAssertTrue(store.feedURL.hasSuffix("/feed.xml"))
+    }
+
+    // MARK: - Settings defaults
+
+    func test_autoFetchIntervalDefaults() {
+        XCTAssertEqual(store.autoFetchInterval, 0)
+        XCTAssertFalse(store.autoStartServer)
     }
 }
