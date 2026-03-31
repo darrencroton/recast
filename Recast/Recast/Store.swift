@@ -207,7 +207,7 @@ final class AppStore {
             .sorted { $0.publishDate > $1.publishDate }
     }
 
-    private func normalizeYouTubeURL(_ url: String) -> String {
+    func normalizeYouTubeURL(_ url: String) -> String {
         var u = url.trimmingCharacters(in: .whitespacesAndNewlines)
         // Convert mobile URLs to desktop
         u = u.replacingOccurrences(of: "https://m.youtube.com", with: "https://www.youtube.com")

@@ -1,0 +1,190 @@
+import XCTest
+@testable import Recast
+
+final class StoreTests: XCTestCase {
+
+    private var store: AppStore!
+    private var tempDir: URL!
+
+    // MARK: - Setup / teardown
+
+    override func setUp() {
+        super.setUp()
+        store = AppStore()
+        tempDir = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try! FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        store.outputDirectory = tempDir
+    }
+
+    override func tearDown() {
+        try? FileManager.default.removeItem(at: tempDir)
+        super.tearDown()
+    }
+
+    // MARK: - Helpers
+
+    private func makeChannel(name: String = "Test", urlHandle: String = "test") -> Channel {
+        Channel(url: "https://www.youtube.com/@\(urlHandle)/videos", name: name)
+    }
+
+    private func makeEpisode(channelID: UUID, videoID: String, daysAgo: Int = 0, fileName: String? = nil) -> Episode {
+        let date = Calendar.current.date(byAdding: .day, value: -daysAgo, to: Date())!
+        var ep = Episode(
+            channelID: channelID,
+            videoID: videoID,
+            title: videoID,
+            publishDate: date,
+            durationSeconds: 120
+        )
+        ep.fileName = fileName
+        return ep
+    }
+
+    // MARK: - normalizeYouTubeURL: mobile → desktop
+
+    func test_normalize_mobileScheme_convertedToDesktop() {
+        let result = store.normalizeYouTubeURL("https://m.youtube.com/@channel/videos")
+        XCTAssertEqual(result, "https://www.youtube.com/@channel/videos")
+    }
+
+    func test_normalize_mobileHandle_convertedAndSuffixed() {
+        let result = store.normalizeYouTubeURL("https://m.youtube.com/@science")
+        XCTAssertEqual(result, "https://www.youtube.com/@science/videos")
+    }
+
+    // MARK: - normalizeYouTubeURL: /videos suffix
+
+    func test_normalize_handleWithoutSuffix_suffixAppended() {
+        let result = store.normalizeYouTubeURL("https://www.youtube.com/@science")
+        XCTAssertEqual(result, "https://www.youtube.com/@science/videos")
+    }
+
+    func test_normalize_handleWithTrailingSlash_suffixAppended() {
+        let result = store.normalizeYouTubeURL("https://www.youtube.com/@science/")
+        XCTAssertEqual(result, "https://www.youtube.com/@science/videos")
+    }
+
+    func test_normalize_handleAlreadyHasSuffix_unchanged() {
+        let result = store.normalizeYouTubeURL("https://www.youtube.com/@science/videos")
+        XCTAssertEqual(result, "https://www.youtube.com/@science/videos")
+    }
+
+    // MARK: - normalizeYouTubeURL: playlist URLs unchanged
+
+    func test_normalize_playlistURL_noSuffixAdded() {
+        let url = "https://www.youtube.com/playlist?list=PLabc123"
+        XCTAssertFalse(store.normalizeYouTubeURL(url).contains("/videos"), "Playlist URLs must not receive a /videos suffix")
+    }
+
+    func test_normalize_playlistURL_valuePreserved() {
+        let url = "https://www.youtube.com/playlist?list=PLabc123"
+        XCTAssertEqual(store.normalizeYouTubeURL(url), url)
+    }
+
+    // MARK: - normalizeYouTubeURL: whitespace
+
+    func test_normalize_leadingAndTrailingWhitespaceStripped() {
+        let result = store.normalizeYouTubeURL("  https://www.youtube.com/@channel/videos  ")
+        XCTAssertEqual(result, "https://www.youtube.com/@channel/videos")
+    }
+
+    func test_normalize_newlineStripped() {
+        let result = store.normalizeYouTubeURL("https://www.youtube.com/@channel/videos\n")
+        XCTAssertEqual(result, "https://www.youtube.com/@channel/videos")
+    }
+
+    // MARK: - episodes(for:)
+
+    func test_episodesForChannel_returnsOnlyMatchingChannel() {
+        let channelA = makeChannel(name: "A", urlHandle: "a")
+        let channelB = makeChannel(name: "B", urlHandle: "b")
+        store.channels = [channelA, channelB]
+        store.episodes = [
+            makeEpisode(channelID: channelA.id, videoID: "a1"),
+            makeEpisode(channelID: channelA.id, videoID: "a2"),
+            makeEpisode(channelID: channelB.id, videoID: "b1"),
+        ]
+        let results = store.episodes(for: channelA.id)
+        XCTAssertEqual(results.count, 2)
+        XCTAssertTrue(results.allSatisfy { $0.channelID == channelA.id })
+    }
+
+    func test_episodesForChannel_sortedNewestFirst() {
+        let channel = makeChannel()
+        store.channels = [channel]
+        store.episodes = [
+            makeEpisode(channelID: channel.id, videoID: "old", daysAgo: 10),
+            makeEpisode(channelID: channel.id, videoID: "new", daysAgo: 1),
+        ]
+        let results = store.episodes(for: channel.id)
+        XCTAssertEqual(results.first?.videoID, "new")
+        XCTAssertEqual(results.last?.videoID, "old")
+    }
+
+    func test_episodesForChannel_emptyWhenChannelHasNoEpisodes() {
+        let channel = makeChannel()
+        store.channels = [channel]
+        store.episodes = []
+        XCTAssertTrue(store.episodes(for: channel.id).isEmpty)
+    }
+
+    func test_episodesForChannel_emptyForUnknownChannelID() {
+        store.channels = []
+        store.episodes = []
+        XCTAssertTrue(store.episodes(for: UUID()).isEmpty)
+    }
+
+    func test_episodesForChannel_doesNotReturnOtherChannelsEpisodes() {
+        let channelA = makeChannel(name: "A", urlHandle: "a")
+        let channelB = makeChannel(name: "B", urlHandle: "b")
+        store.channels = [channelA, channelB]
+        store.episodes = [makeEpisode(channelID: channelB.id, videoID: "b1")]
+        XCTAssertTrue(store.episodes(for: channelA.id).isEmpty)
+    }
+
+    // MARK: - regenerateFeed
+
+    func test_regenerateFeed_createsFeedXMLInOutputDirectory() {
+        let channel = makeChannel()
+        let ep = makeEpisode(channelID: channel.id, videoID: "vid1", fileName: "vid1.mp3")
+        store.channels = [channel]
+        store.episodes = [ep]
+        store.regenerateFeed()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: tempDir.appendingPathComponent("feed.xml").path))
+    }
+
+    func test_regenerateFeed_onlyDownloadedEpisodesInFeed() throws {
+        let channel = makeChannel()
+        let downloaded = makeEpisode(channelID: channel.id, videoID: "dl1", fileName: "dl1.mp3")
+        let pending = makeEpisode(channelID: channel.id, videoID: "pend1", fileName: nil)
+        store.channels = [channel]
+        store.episodes = [downloaded, pending]
+        store.regenerateFeed()
+        let content = try String(contentsOf: tempDir.appendingPathComponent("feed.xml"), encoding: .utf8)
+        XCTAssertTrue(content.contains("dl1"))
+        XCTAssertFalse(content.contains("pend1"))
+    }
+
+    func test_regenerateFeed_episodesOrderedNewestFirst() throws {
+        let channel = makeChannel()
+        let older = makeEpisode(channelID: channel.id, videoID: "older", daysAgo: 10, fileName: "older.mp3")
+        let newer = makeEpisode(channelID: channel.id, videoID: "newer", daysAgo: 1, fileName: "newer.mp3")
+        store.channels = [channel]
+        store.episodes = [older, newer]   // pass in old-first; feed should still sort newest-first
+        store.regenerateFeed()
+        let content = try String(contentsOf: tempDir.appendingPathComponent("feed.xml"), encoding: .utf8)
+        let newerRange = content.range(of: "newer")!
+        let olderRange = content.range(of: "older")!
+        XCTAssertTrue(newerRange.lowerBound < olderRange.lowerBound, "regenerateFeed should emit the newest episode first")
+    }
+
+    func test_regenerateFeed_usesConfiguredServerPort() throws {
+        store.serverPort = 9999
+        store.channels = [makeChannel()]
+        store.episodes = []
+        store.regenerateFeed()
+        let content = try String(contentsOf: tempDir.appendingPathComponent("feed.xml"), encoding: .utf8)
+        XCTAssertTrue(content.contains("localhost:9999"))
+    }
+}
