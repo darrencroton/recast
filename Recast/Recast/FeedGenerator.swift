@@ -54,7 +54,7 @@ enum FeedGenerator {
 
     // MARK: - Helpers
 
-    private static func xmlEscape(_ s: String) -> String {
+    static func xmlEscape(_ s: String) -> String {
         s.replacingOccurrences(of: "&", with: "&amp;")
          .replacingOccurrences(of: "<", with: "&lt;")
          .replacingOccurrences(of: ">", with: "&gt;")
@@ -62,7 +62,7 @@ enum FeedGenerator {
          .replacingOccurrences(of: "'", with: "&apos;")
     }
 
-    private static func rfc2822(_ date: Date) -> String {
+    static func rfc2822(_ date: Date) -> String {
         let f = DateFormatter()
         f.locale = Locale(identifier: "en_US_POSIX")
         f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss Z"
@@ -70,7 +70,7 @@ enum FeedGenerator {
         return f.string(from: date)
     }
 
-    private static func formatDuration(_ seconds: Int) -> String {
+    static func formatDuration(_ seconds: Int) -> String {
         let h = seconds / 3600
         let m = (seconds % 3600) / 60
         let s = seconds % 60
