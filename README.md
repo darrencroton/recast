@@ -69,8 +69,18 @@ Open **Recast > Settings** (Cmd+,) to configure:
 
 ```bash
 cd Recast
+./setup.sh          # Regenerate project if needed
+# Then Cmd+U in Xcode
+```
+
+Or from the command line:
+
+```bash
+cd Recast
 xcodebuild test -scheme Recast -destination 'platform=macOS'
 ```
+
+The test suite covers episode models, RSS feed generation, XML escaping, store logic, search filtering, and episode management. See `RecastTests/` for details.
 
 ## CLI Alternative
 
@@ -99,7 +109,7 @@ Recast/               macOS SwiftUI app
 │   ├── FeedGenerator.swift   RSS feed builder
 │   ├── PodcastServer.swift   HTTP server (NWListener)
 │   └── Paths.swift           File path management
-├── RecastTests/      Unit tests
+├── RecastTests/      XCTest unit tests
 ├── project.yml       XcodeGen config
 └── setup.sh          Generates Xcode project
 cosmic_podcast.py     Standalone CLI tool

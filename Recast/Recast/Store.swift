@@ -263,7 +263,8 @@ final class AppStore {
     // MARK: - Feed
 
     func regenerateFeed() {
-        let baseURL = "http://localhost:\(serverPort)"
+        let host = localIPAddress ?? "localhost"
+        let baseURL = "http://\(host):\(serverPort)"
         let downloaded = episodes.filter(\.isDownloaded)
             .sorted { $0.publishDate > $1.publishDate }
         FeedGenerator.write(
@@ -320,12 +321,14 @@ final class AppStore {
         var ptr: UnsafeMutablePointer<ifaddrs>? = first
         while let ifa = ptr {
             defer { ptr = ifa.pointee.ifa_next }
-            let sa = ifa.pointee.ifa_addr.pointee
+            guard let ifaAddr = ifa.pointee.ifa_addr else { continue }
+            let sa = ifaAddr.pointee
             guard sa.sa_family == UInt8(AF_INET) else { continue }
             let name = String(cString: ifa.pointee.ifa_name)
-            guard name == "en0" || name == "en1" else { continue }
+            // Skip loopback; accept any non-loopback IPv4 interface
+            guard name != "lo0" else { continue }
             var hostname = [CChar](repeating: 0, count: Int(NI_MAXHOST))
-            getnameinfo(ifa.pointee.ifa_addr, socklen_t(sa.sa_len),
+            getnameinfo(ifaAddr, socklen_t(sa.sa_len),
                         &hostname, socklen_t(hostname.count), nil, 0, NI_NUMERICHOST)
             address = String(cString: hostname)
             break

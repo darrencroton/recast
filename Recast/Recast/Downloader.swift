@@ -226,19 +226,21 @@ actor Downloader {
                 process.standardError = stderr
 
                 var stderrText = ""
-                let progressPattern = try! NSRegularExpression(pattern: #"(\d+\.?\d*)%"#)
+                let progressPattern = try? NSRegularExpression(pattern: #"(\d+\.?\d*)%"#)
 
                 stderr.fileHandleForReading.readabilityHandler = { handle in
                     let data = handle.availableData
                     guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
                     stderrText += text
                     // Parse download progress percentages from yt-dlp output
-                    for line in text.components(separatedBy: .newlines) {
-                        let range = NSRange(line.startIndex..., in: line)
-                        if let match = progressPattern.firstMatch(in: line, range: range),
-                           let numRange = Range(match.range(at: 1), in: line) {
-                            if let pct = Double(line[numRange]) {
-                                onProgress(min(pct / 100.0, 1.0))
+                    if let progressPattern {
+                        for line in text.components(separatedBy: .newlines) {
+                            let range = NSRange(line.startIndex..., in: line)
+                            if let match = progressPattern.firstMatch(in: line, range: range),
+                               let numRange = Range(match.range(at: 1), in: line) {
+                                if let pct = Double(line[numRange]) {
+                                    onProgress(min(pct / 100.0, 1.0))
+                                }
                             }
                         }
                     }
@@ -250,7 +252,7 @@ actor Downloader {
                     stderr.fileHandleForReading.readabilityHandler = nil
 
                     if process.terminationStatus == 0 {
-                        continuation.resume()
+                        continuation.resume(returning: ())
                     } else {
                         let msg = stderrText.isEmpty ? "Unknown error" : stderrText
                         continuation.resume(throwing: DownloaderError.processError(msg))

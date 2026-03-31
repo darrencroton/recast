@@ -26,6 +26,21 @@ struct ContentView: View {
         selection.contains(.allEpisodes)
     }
 
+    /// Keep sidebar selection mutually exclusive: All Episodes vs individual channels.
+    private func enforceExclusiveSelection(old: Set<SidebarItem>, new: Set<SidebarItem>) {
+        let addedAll = new.contains(.allEpisodes) && !old.contains(.allEpisodes)
+        let addedChannel = new.contains(where: { if case .channel = $0 { return true }; return false })
+            && !old.contains(where: { if case .channel = $0 { return true }; return false })
+
+        if addedAll {
+            // User just selected All Episodes — deselect any channels
+            selection = [.allEpisodes]
+        } else if addedChannel && old.contains(.allEpisodes) {
+            // User selected a channel while All Episodes was selected — deselect All Episodes
+            selection = new.filter { if case .channel = $0 { return true }; return false }
+        }
+    }
+
     var body: some View {
         if !store.ytDlpReady || !store.ffmpegReady {
             SetupView()
@@ -94,23 +109,26 @@ struct ContentView: View {
         }
         .listStyle(.sidebar)
         .navigationTitle("Channels")
+        .onChange(of: selection) { old, new in
+            enforceExclusiveSelection(old: old, new: new)
+        }
     }
 
     // MARK: - Detail
 
     private var detail: some View {
         Group {
-            if showingAllEpisodes || !selectedChannelIDs.isEmpty {
-                EpisodeListView(
-                    channelIDs: showingAllEpisodes ? Set() : selectedChannelIDs,
-                    searchQuery: searchQuery
-                )
-            } else if store.channels.isEmpty {
+            if store.channels.isEmpty {
                 ContentUnavailableView {
                     Label("Get Started", systemImage: "plus.circle")
                 } description: {
                     Text("Add a YouTube channel to begin downloading episodes.")
                 }
+            } else if showingAllEpisodes || !selectedChannelIDs.isEmpty {
+                EpisodeListView(
+                    channelIDs: showingAllEpisodes ? Set() : selectedChannelIDs,
+                    searchQuery: searchQuery
+                )
             } else {
                 ContentUnavailableView {
                     Label("Select a Channel", systemImage: "sidebar.left")
