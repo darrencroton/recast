@@ -173,7 +173,7 @@ final class StoreTests: XCTestCase {
         let older = makeEpisode(channelID: channel.id, videoID: "older", daysAgo: 10, fileName: "older.mp3")
         let newer = makeEpisode(channelID: channel.id, videoID: "newer", daysAgo: 1, fileName: "newer.mp3")
         store.channels = [channel]
-        store.episodes = [older, newer]
+        store.episodes = [older, newer]   // pass in old-first; feed should still sort newest-first
         store.regenerateFeed()
         let content = try String(contentsOf: tempDir.appendingPathComponent("feed.xml"), encoding: .utf8)
         let newerRange = content.range(of: "newer")!

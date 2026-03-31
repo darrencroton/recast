@@ -110,12 +110,14 @@ final class FeedGeneratorTests: XCTestCase {
     }
 
     func test_formatDuration_secondsPadded() {
+        // 1 minute, 5 seconds — seconds must be zero-padded to two digits
         XCTAssertEqual(FeedGenerator.formatDuration(65), "00:01:05")
     }
 
     // MARK: - rfc2822
 
     func test_rfc2822_knownDate() {
+        // January 15, 2024 12:30:00 UTC is a Monday
         var comps = DateComponents()
         comps.year = 2024; comps.month = 1; comps.day = 15
         comps.hour = 12; comps.minute = 30; comps.second = 0
@@ -256,6 +258,7 @@ final class FeedGeneratorTests: XCTestCase {
     // MARK: - write(): episode ordering
 
     func test_write_preservesInputOrder() throws {
+        // Store pre-sorts before calling write(); this verifies write() doesn't scramble order.
         let channel = makeChannel()
         let first = makeEpisode(channelID: channel.id, videoID: "first", title: "First", fileName: "first.mp3", daysAgo: 1)
         let second = makeEpisode(channelID: channel.id, videoID: "second", title: "Second", fileName: "second.mp3", daysAgo: 10)
