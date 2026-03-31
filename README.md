@@ -35,6 +35,16 @@ Open **Recast > Settings** (Cmd+,) to configure:
 - **Episodes folder** — where MP3 files and the feed are stored (default: `~/Music/Recast`)
 - **Server port** — change the HTTP server port
 
+## Running Tests
+
+```bash
+cd Recast
+./setup.sh          # Regenerate project if needed
+# Then Cmd+U in Xcode
+```
+
+The test suite has 50 unit tests covering episode models, RSS feed generation, XML escaping, and store logic. See `RecastTests/` for details.
+
 ## CLI Alternative
 
 A standalone Python script is also included for quick command-line use:
@@ -61,6 +71,7 @@ Recast/               macOS SwiftUI app
 │   ├── Downloader.swift
 │   ├── FeedGenerator.swift
 │   └── PodcastServer.swift
+├── RecastTests/      XCTest unit tests
 ├── project.yml       XcodeGen config
 └── setup.sh          Generates Xcode project
 cosmic_podcast.py     Standalone CLI tool
