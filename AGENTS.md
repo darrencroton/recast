@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Recast converts YouTube sources into standard RSS podcast feeds. A source can be a YouTube channel, playlist, or a one-off direct episode link. The primary implementation is a macOS SwiftUI app (`Recast/`); a standalone Python CLI (`cosmic_podcast.py`) also exists but is not the focus of active development.
+Recast converts YouTube sources into standard RSS podcast feeds. A source can be a YouTube channel, playlist, or a one-off direct episode link. It is a macOS SwiftUI app (`Recast/`) that discovers, downloads, and serves YouTube content as MP3 podcast episodes via a local HTTP server.
 
 ## Repository Structure
 
@@ -32,8 +32,6 @@ recast/
 │       ├── ModelTests.swift
 │       └── StoreTests.swift
 ├── Recast.app                  Generated Release app bundle after setup
-├── cosmic_podcast.py           Python CLI tool
-├── requirements.txt            Python deps (yt-dlp)
 └── README.md
 ```
 
@@ -84,13 +82,8 @@ The suite covers reset safety, episode models, RSS feed generation, XML escaping
 
 Live yt-dlp/ffmpeg subprocess execution and `PodcastServer` on real network ports are not unit tested.
 
-## Code Style
+## Code Style (Swift)
 
-**Swift:**
 - PascalCase for types, camelCase for properties/methods
 - `MARK:` comments to separate logical sections within files
 - Prefer `struct` over `class` for models; use `actor` for shared mutable state
-
-**Python:**
-- PEP 8 conventions
-- Type hints on function signatures

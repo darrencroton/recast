@@ -72,17 +72,6 @@ xcodebuild test -scheme Recast -destination 'platform=macOS'
 
 Or open in Xcode (`./setup.sh --open-xcode`) and press Cmd+U.
 
-## CLI Alternative
-
-A standalone Python script is included for command-line use:
-
-```bash
-pip install -r requirements.txt
-python cosmic_podcast.py --serve
-```
-
-See `cosmic_podcast.py --help` for options.
-
 ## Project Structure
 
 ```
@@ -103,6 +92,5 @@ Recast/               macOS SwiftUI app
 ├── RecastTests/      XCTest unit tests
 ├── project.yml       XcodeGen config
 └── setup.sh          Generates the project and builds the app bundle
-cosmic_podcast.py     Standalone CLI tool
 setup.sh              Repo-root wrapper that leaves Recast.app at the top level
 ```
