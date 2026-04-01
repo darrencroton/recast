@@ -74,6 +74,7 @@ The repo-root `setup.sh` delegates to `Recast/setup.sh`. The built app bundle is
 - The `New` filter is "found in the most recent fetch for the current scope", not "all undownloaded episodes"
 - Channel and episode multi-selection are shared across `ContentView` and `EpisodeListView`; preserve standard macOS click, Shift-click, and Command-click behavior
 - Toolbar actions are split into global actions (server, QR code, add channel) and selection-scoped actions (refresh, download, delete); keep right-click menus aligned with the same selection rules
+- Reset only removes Recast-managed output artifacts and installed tools; diagnostic logs are intentionally preserved
 
 ### Running Tests
 
@@ -89,12 +90,12 @@ cd Recast
 xcodebuild test -scheme Recast -destination 'platform=macOS'
 ```
 
-The `RecastTests` target uses XCTest with `@testable import Recast`. 102 tests currently cover:
+The `RecastTests` target uses XCTest with `@testable import Recast`. The suite currently covers:
 
 - **`EpisodeTests`** — `isDownloaded` computed property; `formattedDuration` edge cases (zero, sub-minute, hour boundaries, padding)
 - **`ModelTests`** — filename generation, backwards-compatible episode decoding, publish-date fallbacks, yt-dlp list parsing, downloader progress parsing, and progress weighting helpers
 - **`FeedGeneratorTests`** — `xmlEscape` (all five XML special chars); `formatDuration` (HH:MM:SS); `rfc2822` date format; `write()` end-to-end (file creation, episode inclusion/exclusion, enclosure URLs, GUIDs, XML escaping, input-order preservation)
-- **`StoreTests`** — `normalizeYouTubeURL` (mobile→desktop, `/videos` suffix, playlist URLs, whitespace); `episodes(for:)` (filtering, sort order); filtered counts; `regenerateFeed()` (output file, filtering, sort order, port in URLs); persistence hygiene; downloader artifact cleanup
+- **`StoreTests`** — `normalizeYouTubeURL` (mobile→desktop, `/videos` suffix, playlist URLs, whitespace); `episodes(for:)` (filtering, sort order); filtered counts; `regenerateFeed()` (output file, filtering, sort order, port in URLs); persistence hygiene; downloader artifact cleanup; reset safety for managed cleanup and preservation of unowned artifacts
 
 **What is not tested:** live `yt-dlp`/`ffmpeg` subprocess execution, end-to-end media conversion timing, and `PodcastServer` on real network ports. Downloader parsing/cleanup helpers are unit tested, but real downloads remain integration-test territory.
 

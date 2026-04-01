@@ -81,6 +81,7 @@ Open **Recast > Settings** (Cmd+,) to configure:
 - **Auto-start server** — launch the podcast server when the app opens
 - **Auto-fetch interval** — check for new episodes on a schedule
 - **Dependency status** — confirm whether `yt-dlp` and `ffmpeg` are installed
+- **Reset App to Defaults** — clears saved channels, episode state, Recast-managed downloads and feeds, and installed tools while keeping diagnostic logs
 
 ## Running Tests
 
@@ -96,7 +97,7 @@ cd Recast
 xcodebuild test -scheme Recast -destination 'platform=macOS'
 ```
 
-The test suite currently covers 102 XCTest cases across episode models, RSS feed generation, XML escaping, store logic, search filtering, episode management, downloader parsing/cleanup helpers, and persistence hygiene. See `RecastTests/` for details.
+The test suite currently covers reset safety, episode models, RSS feed generation, XML escaping, store logic, search filtering, episode management, downloader parsing/cleanup helpers, and persistence hygiene. See `RecastTests/` for details.
 
 ## CLI Alternative
 
