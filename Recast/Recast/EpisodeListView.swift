@@ -6,6 +6,8 @@ struct EpisodeListView: View {
     let searchQuery: String
 
     @State private var filterMode: EpisodeFilter = .all
+    @State private var isSelectionMode = false
+    @State private var selectedEpisodeIDs: Set<UUID> = []
 
     enum EpisodeFilter: String, CaseIterable {
         case all = "All"
@@ -29,6 +31,14 @@ struct EpisodeListView: View {
         channelIDs.isEmpty || channelIDs.count > 1
     }
 
+    private var visibleEpisodeIDs: Set<UUID> {
+        Set(episodes.map(\.id))
+    }
+
+    private var selectedEpisodes: [Episode] {
+        episodes.filter { selectedEpisodeIDs.contains($0.id) }
+    }
+
     var body: some View {
         Group {
             if store.filteredEpisodes(for: channelIDs, query: "").isEmpty {
@@ -49,15 +59,28 @@ struct EpisodeListView: View {
                         episode: episode,
                         isDownloading: store.activeDownloads.contains(episode.videoID),
                         progress: store.downloadProgress[episode.videoID],
-                        showChannelName: showChannelName
+                        showChannelName: showChannelName,
+                        isSelectionMode: isSelectionMode,
+                        isSelected: selectedEpisodeIDs.contains(episode.id)
                     )
+                    .contentShape(Rectangle())
                     .tag(episode.id)
+                    .onTapGesture {
+                        guard isSelectionMode else { return }
+                        toggleSelection(for: episode.id)
+                    }
                     .contextMenu { episodeContextMenu(for: episode) }
                 }
                 .listStyle(.inset)
             }
         }
         .navigationTitle(navigationTitle)
+        .onChange(of: visibleEpisodeIDs) { _, newValue in
+            selectedEpisodeIDs.formIntersection(newValue)
+            if newValue.isEmpty {
+                isSelectionMode = false
+            }
+        }
         .toolbar {
             ToolbarItem(placement: .automatic) {
                 Picker("Filter", selection: $filterMode) {
@@ -67,6 +90,46 @@ struct EpisodeListView: View {
                 }
                 .pickerStyle(.segmented)
                 .help("Filter episodes")
+            }
+
+            ToolbarItemGroup(placement: .primaryAction) {
+                if isSelectionMode {
+                    Button {
+                        Task {
+                            await store.downloadEpisodes(selectedEpisodeIDs)
+                            selectedEpisodeIDs = Set(
+                                selectedEpisodes
+                                    .filter { !$0.isDownloaded }
+                                    .map(\.id)
+                            )
+                            if selectedEpisodeIDs.isEmpty {
+                                isSelectionMode = false
+                            }
+                        }
+                    } label: {
+                        Label("Download Selected", systemImage: "arrow.down.circle")
+                    }
+                    .disabled(selectedEpisodes.allSatisfy { $0.isDownloaded || store.activeDownloads.contains($0.videoID) })
+
+                    Button(role: .destructive) {
+                        store.deleteEpisodes(selectedEpisodeIDs)
+                        selectedEpisodeIDs.removeAll()
+                        isSelectionMode = false
+                    } label: {
+                        Label("Delete Selected", systemImage: "trash")
+                    }
+                    .disabled(selectedEpisodeIDs.isEmpty)
+                }
+
+                Button {
+                    if isSelectionMode {
+                        selectedEpisodeIDs.removeAll()
+                    }
+                    isSelectionMode.toggle()
+                } label: {
+                    Label(isSelectionMode ? "Done" : "Select", systemImage: isSelectionMode ? "checkmark.circle" : "checklist")
+                }
+                .disabled(episodes.isEmpty)
             }
         }
     }
@@ -116,6 +179,14 @@ struct EpisodeListView: View {
         if channelIDs.count > 1 { return "\(channelIDs.count) Channels" }
         return "Episodes"
     }
+
+    private func toggleSelection(for episodeID: UUID) {
+        if selectedEpisodeIDs.contains(episodeID) {
+            selectedEpisodeIDs.remove(episodeID)
+        } else {
+            selectedEpisodeIDs.insert(episodeID)
+        }
+    }
 }
 
 // MARK: - Episode Row
@@ -125,12 +196,18 @@ struct EpisodeRow: View {
     let isDownloading: Bool
     let progress: Double?
     let showChannelName: Bool
+    let isSelectionMode: Bool
+    let isSelected: Bool
     @Environment(AppStore.self) private var store
 
     var body: some View {
         HStack(spacing: 12) {
-            statusIcon
-                .frame(width: 28)
+            if isSelectionMode {
+                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
+                    .font(.title3)
+                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
+                    .frame(width: 24)
+            }
 
             VStack(alignment: .leading, spacing: 3) {
                 Text(episode.title)
@@ -154,23 +231,13 @@ struct EpisodeRow: View {
 
             Spacer()
 
-            if !episode.isDownloaded && !isDownloading {
-                Button {
-                    Task { await store.downloadEpisode(episode) }
-                } label: {
-                    Image(systemName: "arrow.down.circle")
-                        .font(.title3)
-                        .foregroundStyle(.tint)
-                }
-                .buttonStyle(.plain)
-                .help("Download episode")
-            }
+            actionAccessory
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, 6)
     }
 
     @ViewBuilder
-    private var statusIcon: some View {
+    private var actionAccessory: some View {
         if isDownloading {
             if let progress {
                 CircularProgressView(progress: progress)
@@ -181,10 +248,18 @@ struct EpisodeRow: View {
             }
         } else if episode.isDownloaded {
             Image(systemName: episode.isPlayed ? "checkmark.circle" : "checkmark.circle.fill")
-                .foregroundStyle(episode.isPlayed ? .secondary : .green)
+                .font(.title3)
+                .foregroundStyle(episode.isPlayed ? Color.secondary : .green)
         } else {
-            Image(systemName: "circle.dashed")
-                .foregroundStyle(.secondary)
+            Button {
+                Task { await store.downloadEpisode(episode) }
+            } label: {
+                Image(systemName: "arrow.down.circle")
+                    .font(.title3)
+                    .foregroundStyle(.tint)
+            }
+            .buttonStyle(.plain)
+            .help("Download episode")
         }
     }
 }

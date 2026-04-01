@@ -141,16 +141,12 @@ final class AppStore {
                 let videos = try await downloader.listVideos(channelURL: channel.url)
                 let knownIDs = Set(episodes.filter { $0.channelID == channel.id }.map(\.videoID))
 
-                let df = DateFormatter()
-                df.dateFormat = "yyyy-MM-dd"
-
                 for video in videos where !knownIDs.contains(video.videoID) {
-                    let pubDate = df.date(from: video.uploadDate) ?? .now
                     let ep = Episode(
                         channelID: channel.id,
                         videoID: video.videoID,
                         title: video.title,
-                        publishDate: pubDate,
+                        publishDate: video.publishDate,
                         durationSeconds: video.durationSeconds
                     )
                     episodes.append(ep)
@@ -179,10 +175,12 @@ final class AppStore {
 
         do {
             let fileName = try await downloader.downloadAudio(
-                videoID: videoID,
+                episode: episode,
                 to: episodesDir
             ) { [weak self] pct in
-                DispatchQueue.main.async { self?.downloadProgress[videoID] = pct }
+                Task { @MainActor [weak self, videoID] in
+                    self?.downloadProgress[videoID] = pct
+                }
             }
             if let idx = episodes.firstIndex(where: { $0.videoID == videoID }) {
                 episodes[idx].fileName = fileName
@@ -199,11 +197,25 @@ final class AppStore {
     }
 
     func downloadAllNew(for channelIDs: Set<UUID>) async {
-        let targets = episodes.filter { ep in
+        let targets = sortEpisodesNewestFirst(episodes.filter { ep in
             !ep.isDownloaded &&
             !activeDownloads.contains(ep.videoID) &&
             (channelIDs.isEmpty || channelIDs.contains(ep.channelID))
-        }.sorted { $0.publishDate > $1.publishDate }
+        })
+
+        for episode in targets {
+            await downloadEpisode(episode)
+        }
+    }
+
+    func downloadEpisodes(_ ids: Set<UUID>) async {
+        let targets = sortEpisodesNewestFirst(
+            episodes.filter {
+                ids.contains($0.id) &&
+                !$0.isDownloaded &&
+                !activeDownloads.contains($0.videoID)
+            }
+        )
 
         for episode in targets {
             await downloadEpisode(episode)
@@ -257,7 +269,7 @@ final class AppStore {
             result = result.filter { $0.title.lowercased().contains(q) }
         }
 
-        return result.sorted { $0.publishDate > $1.publishDate }
+        return sortEpisodesNewestFirst(result)
     }
 
     // MARK: - Feed
@@ -265,8 +277,7 @@ final class AppStore {
     func regenerateFeed() {
         let host = localIPAddress ?? "localhost"
         let baseURL = "http://\(host):\(serverPort)"
-        let downloaded = episodes.filter(\.isDownloaded)
-            .sorted { $0.publishDate > $1.publishDate }
+        let downloaded = sortEpisodesNewestFirst(episodes.filter(\.isDownloaded))
         FeedGenerator.write(
             episodes: downloaded,
             channels: channels,
@@ -344,8 +355,7 @@ final class AppStore {
     // MARK: - Helpers
 
     func episodes(for channelID: UUID) -> [Episode] {
-        episodes.filter { $0.channelID == channelID }
-            .sorted { $0.publishDate > $1.publishDate }
+        sortEpisodesNewestFirst(episodes.filter { $0.channelID == channelID })
     }
 
     func normalizeYouTubeURL(_ url: String) -> String {
@@ -355,5 +365,16 @@ final class AppStore {
             u = u.hasSuffix("/") ? u + "videos" : u + "/videos"
         }
         return u
+    }
+
+    private func sortEpisodesNewestFirst(_ episodes: [Episode]) -> [Episode] {
+        episodes.enumerated()
+            .sorted { lhs, rhs in
+                if lhs.element.publishDate != rhs.element.publishDate {
+                    return lhs.element.publishDate > rhs.element.publishDate
+                }
+                return lhs.offset < rhs.offset
+            }
+            .map(\.element)
     }
 }

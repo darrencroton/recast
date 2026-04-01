@@ -67,7 +67,7 @@ struct ContentView: View {
                 addButton
             }
         }
-        .overlay(alignment: .bottom) {
+        .safeAreaInset(edge: .bottom, spacing: 0) {
             statusBar
         }
         .sheet(isPresented: $showAddSheet) {

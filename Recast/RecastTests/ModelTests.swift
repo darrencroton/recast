@@ -54,6 +54,28 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(ep.formattedDuration, "0:00")
     }
 
+    func testSuggestedFileName_includesDateTitleAndVideoID() {
+        let episode = Episode(
+            channelID: UUID(),
+            videoID: "abc123",
+            title: "Meaningful Episode Title",
+            publishDate: Date(timeIntervalSince1970: 0),
+            durationSeconds: 60
+        )
+        XCTAssertEqual(episode.suggestedFileName, "1970-01-01 - Meaningful Episode Title [abc123].mp3")
+    }
+
+    func testSuggestedFileName_sanitizesFilesystemUnsafeCharacters() {
+        let episode = Episode(
+            channelID: UUID(),
+            videoID: "safe42",
+            title: #"A/B:C*D?"#,
+            publishDate: Date(timeIntervalSince1970: 0),
+            durationSeconds: 60
+        )
+        XCTAssertEqual(episode.suggestedFileName, "1970-01-01 - A B C D [safe42].mp3")
+    }
+
     // MARK: - Episode Codable (backwards compatibility)
 
     func testEpisodeDecodesWithoutIsPlayed() throws {
@@ -127,5 +149,23 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(decoded.id, ch.id)
         XCTAssertEqual(decoded.url, ch.url)
         XCTAssertEqual(decoded.name, ch.name)
+    }
+
+    func testPublishedDate_prefersUploadDate() {
+        let date = Downloader.publishedDate(
+            uploadDate: "20260329",
+            timestamp: "1743206400",
+            releaseTimestamp: ""
+        )
+        XCTAssertEqual(Episode.fileDatePrefix(for: date), "2026-03-29")
+    }
+
+    func testPublishedDate_fallsBackToTimestamp() {
+        let date = Downloader.publishedDate(
+            uploadDate: "",
+            timestamp: "1743206400",
+            releaseTimestamp: ""
+        )
+        XCTAssertEqual(Episode.fileDatePrefix(for: date), "2025-03-29")
     }
 }

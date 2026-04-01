@@ -5,11 +5,21 @@ A native macOS app that turns YouTube channels into a podcast feed. Add channels
 ## Quick Start
 
 ```bash
-cd Recast
 ./setup.sh
 ```
 
-This generates the Xcode project and opens it. Press **Cmd+R** to build and run.
+This generates the Xcode project, builds a Release app, and copies `Recast.app` into the repo root so it is obvious where to find it.
+
+From there you can:
+
+1. Drag `Recast.app` into `/Applications`
+2. Double-click it to run
+
+If you also want the Xcode project opened for development, run:
+
+```bash
+./setup.sh --open-xcode
+```
 
 **Requirements:** macOS 14+, Xcode 15+. The app automatically downloads `yt-dlp` and `ffmpeg` on first launch — no terminal setup needed.
 
@@ -68,8 +78,7 @@ Open **Recast > Settings** (Cmd+,) to configure:
 ## Running Tests
 
 ```bash
-cd Recast
-./setup.sh          # Regenerate project if needed
+./setup.sh --open-xcode
 # Then Cmd+U in Xcode
 ```
 
@@ -111,6 +120,7 @@ Recast/               macOS SwiftUI app
 │   └── Paths.swift           File path management
 ├── RecastTests/      XCTest unit tests
 ├── project.yml       XcodeGen config
-└── setup.sh          Generates Xcode project
+└── setup.sh          Generates the project and builds the app bundle
 cosmic_podcast.py     Standalone CLI tool
+setup.sh              Repo-root wrapper that leaves Recast.app at the top level
 ```

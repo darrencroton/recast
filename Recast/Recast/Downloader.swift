@@ -114,7 +114,7 @@ actor Downloader {
     struct VideoInfo {
         let videoID: String
         let title: String
-        let uploadDate: String
+        let publishDate: Date
         let durationSeconds: Int
     }
 
@@ -123,48 +123,55 @@ actor Downloader {
         let output = try await runProcess(
             ytdlp,
             arguments: [
-                "--flat-playlist", "--no-warnings",
-                "--print", "%(id)s\t%(title)s\t%(upload_date>%Y-%m-%d)s\t%(duration)s",
+                "--no-warnings",
+                "--print", "%(id)s\t%(title)s\t%(upload_date)s\t%(timestamp)s\t%(release_timestamp)s\t%(duration)s",
                 "--playlist-end", String(max),
                 channelURL,
             ]
         )
         var results: [VideoInfo] = []
         for line in output.split(separator: "\n") {
-            let parts = line.split(separator: "\t", maxSplits: 3).map(String.init)
-            guard parts.count >= 4 else { continue }
+            let parts = line.split(separator: "\t", maxSplits: 5).map(String.init)
+            guard parts.count >= 6 else { continue }
             results.append(VideoInfo(
                 videoID: parts[0],
                 title: parts[1],
-                uploadDate: parts[2],
-                durationSeconds: Int(parts[3]) ?? 0
+                publishDate: Self.publishedDate(
+                    uploadDate: parts[2],
+                    timestamp: parts[3],
+                    releaseTimestamp: parts[4]
+                ),
+                durationSeconds: Int(parts[5]) ?? 0
             ))
         }
         return results
     }
 
     func downloadAudio(
-        videoID: String,
+        episode: Episode,
         to episodesDir: URL,
         progress: (@Sendable (Double) -> Void)? = nil
     ) async throws -> String {
         guard let ytdlp = ytDlpPath() else { throw DownloaderError.dependencyMissing("yt-dlp") }
 
-        let fileName = "\(videoID).mp3"
+        let fileName = episode.suggestedFileName
         let dest = episodesDir.appendingPathComponent(fileName)
         if FileManager.default.fileExists(atPath: dest.path) { return fileName }
 
+        let fileStem = String(fileName.dropLast(4))
+        let templateName = "\(fileStem).%(ext)s"
         var args = [
             "--extract-audio",
             "--audio-format", "mp3",
             "--audio-quality", "3",
-            "--output", episodesDir.appendingPathComponent("%(id)s.%(ext)s").path,
+            "--embed-metadata",
+            "--output", episodesDir.appendingPathComponent(templateName).path,
             "--no-playlist", "--no-warnings", "--newline",
         ]
         if let ffmpeg = ffmpegPath() {
             args += ["--ffmpeg-location", ffmpeg]
         }
-        args.append("https://www.youtube.com/watch?v=\(videoID)")
+        args.append("https://www.youtube.com/watch?v=\(episode.videoID)")
 
         if let progress {
             try await runProcessWithProgress(ytdlp, arguments: args, onProgress: progress)
@@ -173,9 +180,45 @@ actor Downloader {
         }
 
         guard FileManager.default.fileExists(atPath: dest.path) else {
-            throw DownloaderError.processError("MP3 file was not created for \(videoID).")
+            throw DownloaderError.processError("MP3 file was not created for \(episode.videoID).")
         }
         return fileName
+    }
+
+    static func publishedDate(uploadDate: String, timestamp: String, releaseTimestamp: String) -> Date {
+        if let uploadDate = parseUploadDate(uploadDate) {
+            return uploadDate
+        }
+        if let timestampDate = parseUnixTimestamp(timestamp) {
+            return timestampDate
+        }
+        if let releaseDate = parseUnixTimestamp(releaseTimestamp) {
+            return releaseDate
+        }
+        return .now
+    }
+
+    private static func parseUploadDate(_ value: String) -> Date? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, trimmed != "NA" else { return nil }
+
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+
+        for format in ["yyyyMMdd", "yyyy-MM-dd"] {
+            formatter.dateFormat = format
+            if let date = formatter.date(from: trimmed) {
+                return date
+            }
+        }
+        return nil
+    }
+
+    private static func parseUnixTimestamp(_ value: String) -> Date? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let seconds = TimeInterval(trimmed), seconds > 0 else { return nil }
+        return Date(timeIntervalSince1970: seconds)
     }
 
     // MARK: - Process execution

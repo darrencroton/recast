@@ -62,4 +62,35 @@ struct Episode: Identifiable, Codable, Hashable {
         }
         return String(format: "%d:%02d", m, s)
     }
+
+    var suggestedFileName: String {
+        "\(Self.fileDatePrefix(for: publishDate)) - \(Self.sanitizedFileComponent(from: title, fallback: videoID)) [\(videoID)].mp3"
+    }
+
+    static func sanitizedFileComponent(from value: String, fallback: String) -> String {
+        let allowed = CharacterSet.alphanumerics
+            .union(.whitespaces)
+            .union(CharacterSet(charactersIn: "-_()[]&,.'"))
+
+        let cleaned = value
+            .components(separatedBy: allowed.inverted)
+            .joined(separator: " ")
+            .replacingOccurrences(of: #"\s+"#, with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        let limited = String(cleaned.prefix(120))
+        return limited.isEmpty ? fallback : limited
+    }
+
+    static func fileDatePrefix(for date: Date) -> String {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? .current
+        let components = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(
+            format: "%04d-%02d-%02d",
+            components.year ?? 1970,
+            components.month ?? 1,
+            components.day ?? 1
+        )
+    }
 }

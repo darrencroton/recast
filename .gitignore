@@ -5,6 +5,7 @@ __pycache__/
 # Xcode
 Recast/Recast.xcodeproj/
 Recast/build/
+/Recast.app
 *.xcworkspace
 xcuserdata/
 DerivedData/
