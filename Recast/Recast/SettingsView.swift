@@ -32,14 +32,14 @@ struct SettingsView: View {
                         TextField("Auto-detected", text: $store.serverHost)
                             .frame(width: 180)
                             .onChange(of: store.serverHost) {
-                                store.save()
+                                store.handleServerHostChange()
                             }
                         Text(":")
                             .foregroundStyle(.secondary)
                         TextField("Port", value: $store.serverPort, format: .number)
                             .frame(width: 70)
                             .onChange(of: store.serverPort) {
-                                store.save()
+                                store.handleServerPortChange()
                             }
                     }
                 }

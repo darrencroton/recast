@@ -594,7 +594,7 @@ final class AppStore {
     // MARK: - Feed
 
     func regenerateFeed() {
-        let baseURL = "http://\(resolvedHost):\(serverPort)"
+        let baseURL = serverBaseURL
         let downloaded = sortEpisodesNewestFirst(validEpisodes.filter(\.isDownloaded))
         AppLogger.info("Regenerating feed with \(downloaded.count) downloaded episode(s) at \(baseURL)", category: "feed")
         FeedGenerator.write(
@@ -606,6 +606,22 @@ final class AppStore {
     }
 
     // MARK: - Server
+
+    func handleServerHostChange() {
+        save()
+        regenerateFeed()
+    }
+
+    func handleServerPortChange() {
+        save()
+        guard isServerRunning else {
+            regenerateFeed()
+            return
+        }
+
+        stopServer()
+        startServer()
+    }
 
     func startServer() {
         guard !isServerRunning else { return }
@@ -673,8 +689,21 @@ final class AppStore {
         serverHost.isEmpty ? (localIPAddress ?? "localhost") : serverHost
     }
 
+    var serverBaseURL: String {
+        var components = URLComponents()
+        components.scheme = "http"
+        components.host = normalizedURLHost(resolvedHost)
+        components.port = serverPort
+
+        if let url = components.string {
+            return url
+        }
+
+        return "http://\(urlDisplayHost(resolvedHost)):\(serverPort)"
+    }
+
     var feedURL: String {
-        "http://\(resolvedHost):\(serverPort)/feed.xml"
+        "\(serverBaseURL)/feed.xml"
     }
 
     // MARK: - Helpers
@@ -858,6 +887,21 @@ final class AppStore {
         guard pruned.count != episodes.count else { return false }
         episodes = pruned
         return true
+    }
+
+    private func normalizedURLHost(_ host: String) -> String {
+        guard host.hasPrefix("["), host.hasSuffix("]"), host.count > 2 else {
+            return host
+        }
+        return String(host.dropFirst().dropLast())
+    }
+
+    private func urlDisplayHost(_ host: String) -> String {
+        let normalizedHost = normalizedURLHost(host)
+        guard normalizedHost.contains(":") else {
+            return normalizedHost
+        }
+        return "[\(normalizedHost)]"
     }
 
     private func videosForFetch(for channel: Channel) async throws -> [Downloader.VideoInfo] {

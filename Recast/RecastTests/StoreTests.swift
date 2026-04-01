@@ -220,6 +220,37 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(content.contains("9999"))
     }
 
+    func test_handleServerHostChange_regeneratesExistingFeedWithUpdatedHost() throws {
+        let channel = makeChannel()
+        let episode = makeEpisode(channelID: channel.id, videoID: "vid1", fileName: "vid1.mp3")
+        store.channels = [channel]
+        store.episodes = [episode]
+        store.serverHost = "old.example.com"
+        store.regenerateFeed()
+
+        store.serverHost = "new.example.com"
+        store.handleServerHostChange()
+
+        let content = try String(contentsOf: tempDir.appendingPathComponent("feed.xml"), encoding: .utf8)
+        XCTAssertTrue(content.contains("http://new.example.com:8888/feed.xml"))
+        XCTAssertTrue(content.contains("http://new.example.com:8888/episodes/vid1.mp3"))
+        XCTAssertFalse(content.contains("http://old.example.com:8888"))
+    }
+
+    func test_regenerateFeed_wrapsIPv6HostInURLs() throws {
+        let channel = makeChannel()
+        let episode = makeEpisode(channelID: channel.id, videoID: "vid1", fileName: "vid1.mp3")
+        store.channels = [channel]
+        store.episodes = [episode]
+        store.serverHost = "fd7a:115c:a1e0::42"
+
+        store.regenerateFeed()
+
+        let content = try String(contentsOf: tempDir.appendingPathComponent("feed.xml"), encoding: .utf8)
+        XCTAssertTrue(content.contains("http://[fd7a:115c:a1e0::42]:8888/feed.xml"))
+        XCTAssertTrue(content.contains("http://[fd7a:115c:a1e0::42]:8888/episodes/vid1.mp3"))
+    }
+
     // MARK: - filteredEpisodes
 
     func test_filteredEpisodes_allChannels() {
@@ -439,6 +470,11 @@ final class StoreTests: XCTestCase {
         store.serverPort = 9999
         XCTAssertTrue(store.feedURL.contains("9999"))
         XCTAssertTrue(store.feedURL.hasSuffix("/feed.xml"))
+    }
+
+    func test_feedURL_wrapsIPv6HostInBrackets() {
+        store.serverHost = "fd7a:115c:a1e0::42"
+        XCTAssertEqual(store.feedURL, "http://[fd7a:115c:a1e0::42]:8888/feed.xml")
     }
 
     // MARK: - Settings defaults
