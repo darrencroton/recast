@@ -121,10 +121,6 @@ struct Episode: Identifiable, Codable, Hashable {
     var isNew: Bool
 
     var isDownloaded: Bool { fileName != nil }
-    var artworkFileName: String? {
-        guard let fileName else { return nil }
-        return Self.artworkFileName(forEpisodeFileName: fileName)
-    }
 
     init(channelID: UUID, videoID: String, title: String, publishDate: Date, durationSeconds: Int) {
         self.id = UUID()

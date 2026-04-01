@@ -2,10 +2,7 @@
 
 ## Project Overview
 
-Recast converts YouTube sources into standard RSS podcast feeds. A source can be a YouTube channel, playlist, or a one-off direct episode link. It has two implementations:
-
-1. **macOS App** (`Recast/`) — A SwiftUI desktop app that discovers, downloads, and serves YouTube content as MP3 podcast episodes via a local HTTP server.
-2. **Python CLI** (`cosmic_podcast.py`) — A standalone script originally built for the NSF-Simons Cosmic AI YouTube channel.
+Recast converts YouTube sources into standard RSS podcast feeds. A source can be a YouTube channel, playlist, or a one-off direct episode link. It is a macOS SwiftUI app (`Recast/`) that discovers, downloads, and serves YouTube content as MP3 podcast episodes via a local HTTP server.
 
 ## Repository Structure
 
@@ -35,38 +32,32 @@ recast/
 │       ├── ModelTests.swift
 │       └── StoreTests.swift
 ├── Recast.app                  Generated Release app bundle after setup
-├── cosmic_podcast.py           Python CLI tool
-├── requirements.txt            Python deps (yt-dlp)
 └── README.md
 ```
 
-## macOS App
+## Architecture
 
-### Requirements
-- macOS 14.0+
-- Xcode 15+
-- XcodeGen (`brew install xcodegen`)
+- **MVVM**: `AppStore` (@Observable) holds all state; views read from it via `@Environment`
+- **Downloader** (actor): thread-safe yt-dlp/ffmpeg subprocess execution
+- **Discovery**: collection-source refresh uses yt-dlp playlist metadata for a faster first-pass episode listing
+- **PodcastServer**: HTTP server using Apple's Network framework, binds to `0.0.0.0` on a configurable port (default 8888)
+- **FeedGenerator**: produces RSS 2.0 with iTunes podcast extensions
+- **Server address**: `serverHost` (persisted, default empty) overrides the auto-detected local IP. `resolvedHost` returns `serverHost` if set, otherwise falls back to `localIPAddress ?? "localhost"`. All feed URLs and the generated feed XML use `resolvedHost`. This allows users to configure a Tailscale IP or other custom address.
+- State persists to `~/Library/Application Support/Recast/state.json`
+- Diagnostics log at `~/Library/Application Support/Recast/logs/recast.log`
+- Audio files saved to `~/Music/Recast/` by default, under `episodes/<Channel Name [id]>/`
 
-### Setup & Build
+## Setup & Build
+
 ```bash
-./setup.sh              # Preferred: generate project, build Release app, reveal Recast.app
+./setup.sh              # Generate project, build Release app
 ./setup.sh --open-xcode # Same, then open Recast.xcodeproj
 ```
 
-The repo-root `setup.sh` delegates to `Recast/setup.sh`. The built app bundle is copied to `Recast.app` in the repo root for easy tester handoff.
+Requirements: macOS 14.0+, Xcode 15+, XcodeGen (`brew install xcodegen`).
 
-### Architecture
-- **MVVM**: `AppStore` (@Observable) holds all state; views read from it via `@Environment`
-- **Downloader** (actor): thread-safe yt-dlp/ffmpeg subprocess execution
-- **Discovery**: collection-source refresh uses yt-dlp playlist metadata for a faster first-pass listing
-- **PodcastServer**: HTTP server using Apple's Network framework on a configurable port (default 8888)
-- **FeedGenerator**: Produces RSS 2.0 with iTunes podcast extensions
-- State persists to `~/Library/Application Support/Recast/state.json`
-- Diagnostics log persists to `~/Library/Application Support/Recast/logs/recast.log`
-- Audio files saved to `~/Music/Recast/` by default
-- Downloaded episodes are stored under `episodes/<Channel Name [id]>` inside the output directory
+## Key Patterns
 
-### Key Patterns
 - Use `@Observable` macro (not `ObservableObject`) for state
 - Main-thread UI state in `AppStore` should be mutated from `@MainActor` methods
 - Use `actor` for thread-safe I/O and subprocess management
@@ -74,62 +65,25 @@ The repo-root `setup.sh` delegates to `Recast/setup.sh`. The built app bundle is
 - Error types conform to `LocalizedError`
 - Keep one unified saved-source model. Prefer extending existing source/channel flows over creating separate ad-hoc paths for direct episode URLs.
 - Keep episode ordering newest-first unless a feature explicitly calls for a different presentation
-- The `New` filter is "found in the most recent fetch for the current scope", not "all undownloaded episodes"
-- Adding a direct episode URL should stay consistent with Recast's existing explicit-download model unless the user requests otherwise: add/save first, then download via normal download controls.
-- Source and episode multi-selection are shared across `ContentView` and `EpisodeListView`; preserve standard macOS click, Shift-click, and Command-click behavior
-- Toolbar actions are split into global actions (server, QR code, add source) and selection-scoped actions (refresh, download, delete); keep right-click menus aligned with the same selection rules
+- The `New` filter means "found in the most recent fetch for the current scope", not "all undownloaded episodes"
+- Adding a direct episode URL should stay consistent with Recast's existing explicit-download model: add/save first, then download via normal download controls
+- Source and episode multi-selection are shared across `ContentView` and `EpisodeListView`; preserve standard macOS click, Shift-click, and Command-click behaviour
+- Toolbar actions split into global (server, QR code, add source) and selection-scoped (refresh, download, delete); right-click menus follow the same selection rules
 - Reset only removes Recast-managed output artifacts and installed tools; diagnostic logs are intentionally preserved
 
-### Running Tests
-
-```bash
-./setup.sh --open-xcode
-# Then Cmd+U in Xcode
-```
-
-Or from the command line:
+## Running Tests
 
 ```bash
 cd Recast
 xcodebuild test -scheme Recast -destination 'platform=macOS'
 ```
 
-The `RecastTests` target uses XCTest with `@testable import Recast`. The suite currently covers:
+The suite covers reset safety, episode models, RSS feed generation, XML escaping, store logic, search filtering, source-organised output paths, episode management, downloader parsing/cleanup helpers, and persistence. `FeedGenerator.xmlEscape/rfc2822/formatDuration`, `Store.normalizeYouTubeURL`, and several downloader helpers are intentionally not `private` so `@testable import` can reach them.
 
-- **`EpisodeTests`** — `isDownloaded` computed property; `formattedDuration` edge cases (zero, sub-minute, hour boundaries, padding)
-- **`ModelTests`** — filename generation, backwards-compatible episode/channel decoding, publish-date fallbacks, yt-dlp list parsing (including flat-playlist duration parsing), downloader progress parsing, and progress weighting helpers
-- **`FeedGeneratorTests`** — `xmlEscape` (all five XML special chars); `formatDuration` (HH:MM:SS); `rfc2822` date format; `write()` end-to-end (file creation, episode inclusion/exclusion, enclosure URLs, GUIDs, XML escaping, input-order preservation, nested episode/artwork paths)
-- **`StoreTests`** — `normalizeYouTubeURL` (mobile→desktop, `/videos` suffix, direct episode canonicalisation, playlist URLs, whitespace); `episodes(for:)` (filtering, sort order); filtered counts; `regenerateFeed()` (output file, filtering, sort order, port in URLs); persistence hygiene; downloader artifact cleanup; nested output-path cleanup; one-off source cleanup; reset safety for managed cleanup and preservation of unowned artifacts
+Live yt-dlp/ffmpeg subprocess execution and `PodcastServer` on real network ports are not unit tested.
 
-**What is not tested:** live `yt-dlp`/`ffmpeg` subprocess execution, end-to-end media conversion timing, and `PodcastServer` on real network ports. Downloader parsing/cleanup helpers are unit tested, but real downloads remain integration-test territory.
+## Code Style (Swift)
 
-**Testability note:** `FeedGenerator.xmlEscape/rfc2822/formatDuration`, `Store.normalizeYouTubeURL`, and several downloader parsing/cleanup helpers are intentionally not `private` so `@testable import` can reach them.
-
-## Python CLI
-
-### Requirements
-- Python 3
-- `ffmpeg` installed on PATH
-
-### Setup & Run
-```bash
-pip install -r requirements.txt
-python cosmic_podcast.py --help
-python cosmic_podcast.py --serve       # Start local podcast server
-python cosmic_podcast.py --max 5       # Fetch latest 5 episodes only
-```
-
-## External Dependencies (Auto-downloaded by macOS app)
-- **yt-dlp** — fetched from GitHub releases on first launch
-- **ffmpeg** — downloaded and cached in app support directory
-
-## Code Style
-
-**Swift:**
 - PascalCase for types, camelCase for properties/methods
 - `MARK:` comments to separate logical sections within files
 - Prefer `struct` over `class` for models; use `actor` for shared mutable state
-
-**Python:**
-- PEP 8 conventions
-- Type hints on function signatures

@@ -87,7 +87,7 @@ final class ModelTests: XCTestCase {
         )
         episode.fileName = "1970-01-01 - Covered Episode [cover1].mp3"
 
-        XCTAssertEqual(episode.artworkFileName, "1970-01-01 - Covered Episode [cover1].jpg")
+        XCTAssertEqual(Episode.artworkFileName(forEpisodeFileName: episode.fileName!), "1970-01-01 - Covered Episode [cover1].jpg")
     }
 
     func testArtworkFileName_preservesRelativeChannelFolder() {
@@ -101,7 +101,7 @@ final class ModelTests: XCTestCase {
         episode.fileName = "Channel Folder [abc12345]/1970-01-01 - Covered Episode [cover2].mp3"
 
         XCTAssertEqual(
-            episode.artworkFileName,
+            Episode.artworkFileName(forEpisodeFileName: episode.fileName!),
             "Channel Folder [abc12345]/1970-01-01 - Covered Episode [cover2].jpg"
         )
     }

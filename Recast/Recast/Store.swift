@@ -28,6 +28,7 @@ final class AppStore {
     var episodes: [Episode] = []
     var outputDirectory: URL
     var serverPort: Int = 8888
+    var serverHost: String = ""   // empty = auto-detect from network interfaces
     var isServerRunning = false
     var isFetching = false
     var isStoppingFetch = false
@@ -85,6 +86,7 @@ final class AppStore {
         var episodes: [Episode]
         var outputDirectory: String
         var serverPort: Int
+        var serverHost: String?
         var autoFetchInterval: Int?
         var autoStartServer: Bool?
     }
@@ -95,6 +97,7 @@ final class AppStore {
             episodes: episodes,
             outputDirectory: outputDirectory.path,
             serverPort: serverPort,
+            serverHost: serverHost.isEmpty ? nil : serverHost,
             autoFetchInterval: autoFetchInterval,
             autoStartServer: autoStartServer
         )
@@ -129,6 +132,7 @@ final class AppStore {
         episodes = state.episodes
         outputDirectory = sanitizedOutputDirectory(URL(fileURLWithPath: state.outputDirectory))
         serverPort = state.serverPort
+        serverHost = state.serverHost ?? ""
         autoFetchInterval = state.autoFetchInterval ?? 0
         autoStartServer = state.autoStartServer ?? false
 
@@ -590,8 +594,7 @@ final class AppStore {
     // MARK: - Feed
 
     func regenerateFeed() {
-        let host = localIPAddress ?? "localhost"
-        let baseURL = "http://\(host):\(serverPort)"
+        let baseURL = "http://\(resolvedHost):\(serverPort)"
         let downloaded = sortEpisodesNewestFirst(validEpisodes.filter(\.isDownloaded))
         AppLogger.info("Regenerating feed with \(downloaded.count) downloaded episode(s) at \(baseURL)", category: "feed")
         FeedGenerator.write(
@@ -666,9 +669,12 @@ final class AppStore {
         return address
     }
 
+    var resolvedHost: String {
+        serverHost.isEmpty ? (localIPAddress ?? "localhost") : serverHost
+    }
+
     var feedURL: String {
-        let host = localIPAddress ?? "localhost"
-        return "http://\(host):\(serverPort)/feed.xml"
+        "http://\(resolvedHost):\(serverPort)/feed.xml"
     }
 
     // MARK: - Helpers
@@ -834,6 +840,7 @@ final class AppStore {
         episodes.removeAll()
         outputDirectory = defaultOutputDirectory
         serverPort = Self.defaultServerPort
+        serverHost = ""
         autoFetchInterval = Self.defaultAutoFetchInterval
         autoStartServer = Self.defaultAutoStartServer
         activeDownloads.removeAll()

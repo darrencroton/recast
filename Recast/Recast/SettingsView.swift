@@ -27,11 +27,22 @@ struct SettingsView: View {
             }
 
             Section("Podcast Server") {
-                TextField("Port", value: $store.serverPort, format: .number)
-                    .frame(width: 100)
-                    .onChange(of: store.serverPort) {
-                        store.save()
+                LabeledContent("Address") {
+                    HStack(spacing: 4) {
+                        TextField("Auto-detected", text: $store.serverHost)
+                            .frame(width: 180)
+                            .onChange(of: store.serverHost) {
+                                store.save()
+                            }
+                        Text(":")
+                            .foregroundStyle(.secondary)
+                        TextField("Port", value: $store.serverPort, format: .number)
+                            .frame(width: 70)
+                            .onChange(of: store.serverPort) {
+                                store.save()
+                            }
                     }
+                }
 
                 Toggle("Start server when app launches", isOn: $store.autoStartServer)
                     .onChange(of: store.autoStartServer) {
