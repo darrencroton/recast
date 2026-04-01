@@ -189,6 +189,8 @@ actor Downloader {
         private func currentUpdate(at date: Date) -> ProgressUpdate {
             let progress: Double
             switch currentPhase {
+            case .queued:
+                progress = 0
             case .preparing:
                 progress = latestPreparingProgress
             case .fetchingArtwork:

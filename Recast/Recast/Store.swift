@@ -318,8 +318,10 @@ final class AppStore {
     @MainActor
     func downloadEpisode(_ episode: Episode, operationToken: UInt64? = nil) async {
         let operationToken = operationToken ?? operationGeneration
+        let existingStatus = activeDownloadStatus[episode.videoID]
         guard isCurrentOperation(operationToken) else { return }
         guard !activeDownloads.contains(episode.videoID), !episode.isDownloaded else { return }
+        guard existingStatus == nil || existingStatus?.phase == .queued else { return }
         let episodesDir = Paths.ensureManagedEpisodesDirectory(in: outputDirectory)
         let videoID = episode.videoID
 
@@ -375,14 +377,17 @@ final class AppStore {
         cancelAllDownloadsRequested = false
         let targets = sortEpisodesNewestFirst(validEpisodes.filter { ep in
             !ep.isDownloaded &&
-            !activeDownloads.contains(ep.videoID) &&
+            activeDownloadStatus[ep.videoID] == nil &&
             (channelIDs.isEmpty || channelIDs.contains(ep.channelID))
         })
+        queueDownloads(targets)
 
         for episode in targets {
             guard isCurrentOperation(operationToken), !cancelAllDownloadsRequested else { break }
             await downloadEpisode(episode, operationToken: operationToken)
         }
+
+        clearQueuedDownloads(targets)
     }
 
     @MainActor
@@ -394,14 +399,17 @@ final class AppStore {
             validEpisodes.filter {
                 ids.contains($0.id) &&
                 !$0.isDownloaded &&
-                !activeDownloads.contains($0.videoID)
+                activeDownloadStatus[$0.videoID] == nil
             }
         )
+        queueDownloads(targets)
 
         for episode in targets {
             guard isCurrentOperation(operationToken), !cancelAllDownloadsRequested else { break }
             await downloadEpisode(episode, operationToken: operationToken)
         }
+
+        clearQueuedDownloads(targets)
     }
 
     /// Auto-fetch: discover AND download (background behaviour)
@@ -592,6 +600,10 @@ final class AppStore {
         !activeDownloads.isEmpty
     }
 
+    var hasPendingDownloads: Bool {
+        !activeDownloadStatus.isEmpty
+    }
+
     var activeDownloadEpisodes: [Episode] {
         sortEpisodesNewestFirst(validEpisodes.filter { activeDownloadStatus[$0.videoID] != nil })
     }
@@ -638,6 +650,21 @@ final class AppStore {
         }
     }
 
+    private func queueDownloads(_ episodes: [Episode]) {
+        for episode in episodes where activeDownloadStatus[episode.videoID] == nil {
+            activeDownloadStatus[episode.videoID] = DownloadStatus(progress: 0, phase: .queued)
+        }
+    }
+
+    private func clearQueuedDownloads(_ episodes: [Episode]) {
+        for episode in episodes where activeDownloadStatus[episode.videoID]?.phase == .queued {
+            activeDownloadStatus.removeValue(forKey: episode.videoID)
+        }
+        if activeDownloadStatus.isEmpty {
+            isStoppingDownloads = false
+        }
+    }
+
     func stopDownload(videoID: String) {
         guard activeDownloads.contains(videoID) else { return }
         statusMessage = "Stopping download…"
@@ -649,7 +676,7 @@ final class AppStore {
     }
 
     func stopAllDownloads() {
-        guard hasActiveDownloads else { return }
+        guard hasPendingDownloads else { return }
         cancelAllDownloadsRequested = true
         isStoppingDownloads = true
         statusMessage = "Stopping downloads…"
@@ -688,7 +715,7 @@ final class AppStore {
         autoFetchTimer?.invalidate()
         autoFetchTimer = nil
 
-        if hasActiveDownloads {
+        if hasPendingDownloads {
             isStoppingDownloads = true
             await downloader.cancelAllDownloadsAndWait()
         }

@@ -282,6 +282,13 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.episodeCount(for: Set(), query: "", filter: .all), 2)
     }
 
+    func test_hasPendingDownloads_tracksQueuedStatuses() {
+        store.activeDownloadStatus["queued"] = DownloadStatus(progress: 0, phase: .queued)
+
+        XCTAssertTrue(store.hasPendingDownloads)
+        XCTAssertFalse(store.hasActiveDownloads)
+    }
+
     // MARK: - togglePlayed
 
     func test_togglePlayed() {

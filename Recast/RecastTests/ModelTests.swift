@@ -261,4 +261,8 @@ final class ModelTests: XCTestCase {
     func testDownloadPhaseLabel_convertingAudio() {
         XCTAssertEqual(DownloadPhase.convertingAudio.label, "Converting to MP3")
     }
+
+    func testDownloadPhaseLabel_queued() {
+        XCTAssertEqual(DownloadPhase.queued.label, "Queued for download")
+    }
 }

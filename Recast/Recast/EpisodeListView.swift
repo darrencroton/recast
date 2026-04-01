@@ -143,7 +143,7 @@ struct EpisodeListView: View {
 
     private func canDownload(_ episodes: [Episode]) -> Bool {
         episodes.contains {
-            !$0.isDownloaded && !store.activeDownloads.contains($0.videoID)
+            !$0.isDownloaded && store.downloadStatus(for: $0) == nil
         }
     }
 }
@@ -160,6 +160,10 @@ struct EpisodeRow: View {
 
     private var channelName: String {
         store.channels.first(where: { $0.id == episode.channelID })?.name ?? "Unknown Channel"
+    }
+
+    private var isCurrentDownload: Bool {
+        store.activeDownloads.contains(episode.videoID)
     }
 
     var body: some View {
@@ -196,7 +200,7 @@ struct EpisodeRow: View {
             actionAccessory
                 .frame(width: 24, height: 24)
                 .onHover { isHovering in
-                    isHoveringActionControl = downloadStatus != nil && isHovering
+                    isHoveringActionControl = isCurrentDownload && isHovering
                 }
         }
         .padding(.vertical, 6)
@@ -205,7 +209,7 @@ struct EpisodeRow: View {
     @ViewBuilder
     private var actionAccessory: some View {
         if let downloadStatus {
-            if isHoveringActionControl {
+            if isCurrentDownload && isHoveringActionControl {
                 Button(role: .destructive) {
                     store.stopDownload(videoID: episode.videoID)
                 } label: {
@@ -215,6 +219,9 @@ struct EpisodeRow: View {
                 }
                 .buttonStyle(.plain)
                 .help("Stop download")
+            } else if downloadStatus.phase == .queued {
+                CircularProgressView(symbolName: "pause.fill")
+                    .frame(width: 22, height: 22)
             } else {
                 CircularProgressView(progress: downloadStatus.progress)
                     .frame(width: 22, height: 22)
@@ -241,7 +248,8 @@ struct EpisodeRow: View {
 // MARK: - Circular progress indicator
 
 struct CircularProgressView: View {
-    let progress: Double
+    var progress: Double? = nil
+    var symbolName: String? = nil
 
     var body: some View {
         ZStack {
@@ -249,15 +257,21 @@ struct CircularProgressView: View {
                 .stroke(lineWidth: 2.5)
                 .foregroundStyle(.quaternary)
 
-            Circle()
-                .trim(from: 0, to: progress)
-                .stroke(style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
-                .foregroundStyle(.tint)
-                .rotationEffect(.degrees(-90))
+            if let progress {
+                Circle()
+                    .trim(from: 0, to: progress)
+                    .stroke(style: StrokeStyle(lineWidth: 2.5, lineCap: .round))
+                    .foregroundStyle(.tint)
+                    .rotationEffect(.degrees(-90))
 
-            Text("\(Int(progress * 100))")
-                .font(.system(size: 8, weight: .medium))
-                .foregroundStyle(.secondary)
+                Text("\(Int(progress * 100))")
+                    .font(.system(size: 8, weight: .medium))
+                    .foregroundStyle(.secondary)
+            } else if let symbolName {
+                Image(systemName: symbolName)
+                    .font(.system(size: 8, weight: .semibold))
+                    .foregroundStyle(.secondary)
+            }
         }
     }
 }

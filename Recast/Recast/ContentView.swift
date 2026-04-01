@@ -33,6 +33,7 @@ struct ContentView: View {
     @State private var episodeFilter: EpisodeFilter = .all
     @State private var focusedPane: FocusedPane?
     @State private var isHoveringRefreshControl = false
+    @State private var isHoveringDownloadControl = false
 
     private var selectedChannelIDs: Set<UUID> {
         var ids = Set<UUID>()
@@ -127,9 +128,10 @@ struct ContentView: View {
     }
 
     private var canDownloadSelectedEpisodes: Bool {
+        if store.hasPendingDownloads { return true }
         guard case .episodes = selectionContext else { return false }
         return selectedVisibleEpisodes.contains {
-            !$0.isDownloaded && !store.activeDownloads.contains($0.videoID)
+            !$0.isDownloaded && store.downloadStatus(for: $0) == nil
         }
     }
 
@@ -242,7 +244,7 @@ struct ContentView: View {
 
     private var detail: some View {
         VStack(spacing: 0) {
-            if store.isFetching || store.hasActiveDownloads {
+            if store.isFetching || store.hasPendingDownloads {
                 operationSummaryBar
             }
 
@@ -330,12 +332,29 @@ struct ContentView: View {
 
     private var downloadSelectionButton: some View {
         Button {
-            downloadSelectedEpisodes()
+            if store.hasPendingDownloads {
+                store.stopAllDownloads()
+            } else {
+                downloadSelectedEpisodes()
+            }
         } label: {
-            Label("Download", systemImage: "arrow.down.circle")
+            if store.hasPendingDownloads {
+                if isHoveringDownloadControl {
+                    Image(systemName: "stop.circle.fill")
+                        .foregroundStyle(.red)
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+            } else {
+                Label("Download", systemImage: "arrow.down.circle")
+            }
         }
         .disabled(!canDownloadSelectedEpisodes)
-        .help("Download the selected episodes")
+        .onHover { isHovering in
+            isHoveringDownloadControl = store.hasPendingDownloads && isHovering
+        }
+        .help(store.hasPendingDownloads ? "Stop all downloads" : "Download the selected episodes")
     }
 
     private var deleteSelectionButton: some View {
@@ -564,7 +583,7 @@ struct ContentView: View {
                 .padding(.vertical, 10)
             }
 
-            if store.hasActiveDownloads {
+            if store.hasPendingDownloads {
                 HStack(spacing: 10) {
                     Image(systemName: "arrow.down.circle.fill")
                         .foregroundStyle(.tint)

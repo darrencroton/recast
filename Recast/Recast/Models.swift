@@ -21,6 +21,7 @@ enum EpisodeFilter: String, CaseIterable {
 }
 
 enum DownloadPhase: Equatable {
+    case queued
     case preparing
     case fetchingArtwork
     case downloadingAudio
@@ -30,6 +31,8 @@ enum DownloadPhase: Equatable {
 
     var label: String {
         switch self {
+        case .queued:
+            return "Queued for download"
         case .preparing:
             return "Preparing download"
         case .fetchingArtwork:
