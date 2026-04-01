@@ -89,7 +89,7 @@ struct ContentView: View {
             } else {
                 Label("All Episodes", systemImage: "rectangle.stack")
                     .tag(SidebarItem.allEpisodes)
-                    .badge(store.episodes.count)
+                    .badge(store.allEpisodesCount)
 
                 Section("Channels") {
                     ForEach(store.channels) { channel in

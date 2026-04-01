@@ -5,15 +5,21 @@ final class StoreTests: XCTestCase {
 
     private var store: AppStore!
     private var tempDir: URL!
+    private var tempStateFile: URL!
 
     // MARK: - Setup / teardown
 
     override func setUp() {
         super.setUp()
-        store = AppStore()
         tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try! FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
+        tempStateFile = tempDir.appendingPathComponent("state.json")
+        store = AppStore(
+            stateFileURL: tempStateFile,
+            shouldLoadPersistentState: false,
+            autoCheckDependencies: false
+        )
         store.outputDirectory = tempDir
         store.channels = []
         store.episodes = []
@@ -193,9 +199,10 @@ final class StoreTests: XCTestCase {
     // MARK: - filteredEpisodes
 
     func test_filteredEpisodes_allChannels() {
-        let chID = UUID()
+        let channel = makeChannel()
+        store.channels = [channel]
         store.episodes = (0..<5).map { i in
-            makeEpisode(channelID: chID, videoID: "vid\(i)", daysAgo: i)
+            makeEpisode(channelID: channel.id, videoID: "vid\(i)", daysAgo: i)
         }
         let result = store.filteredEpisodes(for: Set(), query: "")
         XCTAssertEqual(result.count, 5)
@@ -203,37 +210,41 @@ final class StoreTests: XCTestCase {
     }
 
     func test_filteredEpisodes_singleChannel() {
-        let chA = UUID()
-        let chB = UUID()
+        let channelA = makeChannel(name: "A", urlHandle: "a")
+        let channelB = makeChannel(name: "B", urlHandle: "b")
+        store.channels = [channelA, channelB]
         store.episodes = [
-            makeEpisode(channelID: chA, videoID: "a1"),
-            makeEpisode(channelID: chB, videoID: "b1"),
+            makeEpisode(channelID: channelA.id, videoID: "a1"),
+            makeEpisode(channelID: channelB.id, videoID: "b1"),
         ]
-        let result = store.filteredEpisodes(for: [chA], query: "")
+        let result = store.filteredEpisodes(for: [channelA.id], query: "")
         XCTAssertEqual(result.count, 1)
-        XCTAssertTrue(result.allSatisfy { $0.channelID == chA })
+        XCTAssertTrue(result.allSatisfy { $0.channelID == channelA.id })
     }
 
     func test_filteredEpisodes_searchQuery() {
-        let chID = UUID()
+        let channel = makeChannel()
+        store.channels = [channel]
         store.episodes = [
-            makeEpisode(channelID: chID, videoID: "match"),
-            makeEpisode(channelID: chID, videoID: "other"),
+            makeEpisode(channelID: channel.id, videoID: "match"),
+            makeEpisode(channelID: channel.id, videoID: "other"),
         ]
         let result = store.filteredEpisodes(for: Set(), query: "match")
         XCTAssertEqual(result.count, 1)
     }
 
     func test_filteredEpisodes_caseInsensitiveSearch() {
-        let chID = UUID()
-        store.episodes = [makeEpisode(channelID: chID, videoID: "MyVideo")]
+        let channel = makeChannel()
+        store.channels = [channel]
+        store.episodes = [makeEpisode(channelID: channel.id, videoID: "MyVideo")]
         let result = store.filteredEpisodes(for: Set(), query: "myvideo")
         XCTAssertEqual(result.count, 1)
     }
 
     func test_filteredEpisodes_noMatch() {
-        let chID = UUID()
-        store.episodes = [makeEpisode(channelID: chID, videoID: "something")]
+        let channel = makeChannel()
+        store.channels = [channel]
+        store.episodes = [makeEpisode(channelID: channel.id, videoID: "something")]
         let result = store.filteredEpisodes(for: Set(), query: "nonexistent")
         XCTAssertTrue(result.isEmpty)
     }
@@ -302,5 +313,84 @@ final class StoreTests: XCTestCase {
     func test_autoFetchIntervalDefaults() {
         XCTAssertEqual(store.autoFetchInterval, 0)
         XCTAssertFalse(store.autoStartServer)
+    }
+
+    // MARK: - persistence hygiene
+
+    func test_load_prunesEpisodesWithoutMatchingChannels() throws {
+        let validChannel = makeChannel(name: "Valid", urlHandle: "valid")
+        let validEpisode = makeEpisode(channelID: validChannel.id, videoID: "keep")
+        let orphanEpisode = makeEpisode(channelID: UUID(), videoID: "orphan")
+
+        let payload: [String: Any] = [
+            "channels": [[
+                "id": validChannel.id.uuidString,
+                "url": validChannel.url,
+                "name": validChannel.name,
+                "dateAdded": validChannel.dateAdded.timeIntervalSince1970,
+            ]],
+            "episodes": [
+                [
+                    "id": validEpisode.id.uuidString,
+                    "channelID": validEpisode.channelID.uuidString,
+                    "videoID": validEpisode.videoID,
+                    "title": validEpisode.title,
+                    "publishDate": validEpisode.publishDate.timeIntervalSince1970,
+                    "durationSeconds": validEpisode.durationSeconds,
+                    "isPlayed": validEpisode.isPlayed,
+                ],
+                [
+                    "id": orphanEpisode.id.uuidString,
+                    "channelID": orphanEpisode.channelID.uuidString,
+                    "videoID": orphanEpisode.videoID,
+                    "title": orphanEpisode.title,
+                    "publishDate": orphanEpisode.publishDate.timeIntervalSince1970,
+                    "durationSeconds": orphanEpisode.durationSeconds,
+                    "isPlayed": orphanEpisode.isPlayed,
+                ],
+            ],
+            "outputDirectory": tempDir.path,
+            "serverPort": 8888,
+            "autoFetchInterval": 0,
+            "autoStartServer": false,
+        ]
+
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        try data.write(to: tempStateFile)
+
+        let loadedStore = AppStore(
+            stateFileURL: tempStateFile,
+            shouldLoadPersistentState: true,
+            autoCheckDependencies: false
+        )
+
+        XCTAssertEqual(loadedStore.allEpisodesCount, 1)
+        XCTAssertEqual(loadedStore.episodes.count, 1)
+        XCTAssertEqual(loadedStore.episodes.first?.videoID, "keep")
+    }
+
+    func test_load_resetsMissingTemporaryOutputDirectoryToDefault() throws {
+        let missingTempDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+
+        let payload: [String: Any] = [
+            "channels": [],
+            "episodes": [],
+            "outputDirectory": missingTempDirectory.path,
+            "serverPort": 8888,
+            "autoFetchInterval": 0,
+            "autoStartServer": false,
+        ]
+
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        try data.write(to: tempStateFile)
+
+        let loadedStore = AppStore(
+            stateFileURL: tempStateFile,
+            shouldLoadPersistentState: true,
+            autoCheckDependencies: false
+        )
+
+        XCTAssertEqual(loadedStore.outputDirectory.standardizedFileURL, Paths.defaultOutputDir.standardizedFileURL)
     }
 }

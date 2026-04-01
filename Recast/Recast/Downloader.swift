@@ -15,6 +15,12 @@ enum DownloaderError: LocalizedError {
 }
 
 actor Downloader {
+    struct ProcessOutput {
+        let stdout: String
+        let stderr: String
+        let terminationStatus: Int32
+    }
+
     // MARK: - Dependency resolution
 
     func ytDlpPath() -> String? {
@@ -120,30 +126,34 @@ actor Downloader {
 
     func listVideos(channelURL: String, max: Int = 50) async throws -> [VideoInfo] {
         guard let ytdlp = ytDlpPath() else { throw DownloaderError.dependencyMissing("yt-dlp") }
-        let output = try await runProcess(
+        let processOutput = try await runProcessCapturingOutput(
             ytdlp,
             arguments: [
+                "--ignore-errors",
                 "--no-warnings",
                 "--print", "%(id)s\t%(title)s\t%(upload_date)s\t%(timestamp)s\t%(release_timestamp)s\t%(duration)s",
                 "--playlist-end", String(max),
                 channelURL,
             ]
         )
-        var results: [VideoInfo] = []
-        for line in output.split(separator: "\n") {
-            let parts = line.split(separator: "\t", maxSplits: 5).map(String.init)
-            guard parts.count >= 6 else { continue }
-            results.append(VideoInfo(
-                videoID: parts[0],
-                title: parts[1],
-                publishDate: Self.publishedDate(
-                    uploadDate: parts[2],
-                    timestamp: parts[3],
-                    releaseTimestamp: parts[4]
-                ),
-                durationSeconds: Int(parts[5]) ?? 0
-            ))
+
+        let results = Self.parseVideoListOutput(processOutput.stdout)
+
+        if processOutput.terminationStatus != 0 {
+            let trimmedError = processOutput.stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+            if results.isEmpty {
+                let message = trimmedError.isEmpty ? "yt-dlp failed without output." : trimmedError
+                throw DownloaderError.processError(message)
+            }
+
+            if !trimmedError.isEmpty {
+                AppLogger.warning(
+                    "yt-dlp returned \(processOutput.terminationStatus) for \(channelURL) after listing \(results.count) valid video(s): \(trimmedError)",
+                    category: "fetch"
+                )
+            }
         }
+
         return results
     }
 
@@ -221,9 +231,38 @@ actor Downloader {
         return Date(timeIntervalSince1970: seconds)
     }
 
+    static func parseVideoListOutput(_ output: String) -> [VideoInfo] {
+        var results: [VideoInfo] = []
+        for line in output.split(separator: "\n") {
+            let parts = line.split(separator: "\t", maxSplits: 5).map(String.init)
+            guard parts.count >= 6 else { continue }
+            results.append(VideoInfo(
+                videoID: parts[0],
+                title: parts[1],
+                publishDate: Self.publishedDate(
+                    uploadDate: parts[2],
+                    timestamp: parts[3],
+                    releaseTimestamp: parts[4]
+                ),
+                durationSeconds: Int(parts[5]) ?? 0
+            ))
+        }
+        return results
+    }
+
     // MARK: - Process execution
 
     private func runProcess(_ path: String, arguments: [String]) async throws -> String {
+        let output = try await runProcessCapturingOutput(path, arguments: arguments)
+        if output.terminationStatus == 0 {
+            return output.stdout
+        }
+
+        let message = output.stderr.isEmpty ? "Unknown error" : output.stderr
+        throw DownloaderError.processError(message)
+    }
+
+    private func runProcessCapturingOutput(_ path: String, arguments: [String]) async throws -> ProcessOutput {
         try await withCheckedThrowingContinuation { continuation in
             DispatchQueue.global(qos: .userInitiated).async {
                 let process = Process()
@@ -238,14 +277,14 @@ actor Downloader {
                     try process.run()
                     process.waitUntilExit()
                     let outData = stdout.fileHandleForReading.readDataToEndOfFile()
+                    let errData = stderr.fileHandleForReading.readDataToEndOfFile()
                     let output = String(data: outData, encoding: .utf8) ?? ""
-                    if process.terminationStatus == 0 {
-                        continuation.resume(returning: output)
-                    } else {
-                        let errData = stderr.fileHandleForReading.readDataToEndOfFile()
-                        let errMsg = String(data: errData, encoding: .utf8) ?? "Unknown error"
-                        continuation.resume(throwing: DownloaderError.processError(errMsg))
-                    }
+                    let errorOutput = String(data: errData, encoding: .utf8) ?? ""
+                    continuation.resume(returning: ProcessOutput(
+                        stdout: output,
+                        stderr: errorOutput,
+                        terminationStatus: process.terminationStatus
+                    ))
                 } catch {
                     continuation.resume(throwing: error)
                 }

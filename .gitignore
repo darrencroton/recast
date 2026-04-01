@@ -10,3 +10,5 @@ Recast/build/
 xcuserdata/
 DerivedData/
 .build/
+
+.claude/

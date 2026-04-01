@@ -168,4 +168,32 @@ final class ModelTests: XCTestCase {
         )
         XCTAssertEqual(Episode.fileDatePrefix(for: date), "2025-03-29")
     }
+
+    func testParseVideoListOutput_parsesCompleteRows() {
+        let output = """
+        abc123\tEpisode One\t20260329\t1743206400\t\t300
+        def456\tEpisode Two\t\t1743120000\t\t125
+        """
+
+        let videos = Downloader.parseVideoListOutput(output)
+
+        XCTAssertEqual(videos.count, 2)
+        XCTAssertEqual(videos[0].videoID, "abc123")
+        XCTAssertEqual(videos[0].title, "Episode One")
+        XCTAssertEqual(Episode.fileDatePrefix(for: videos[0].publishDate), "2026-03-29")
+        XCTAssertEqual(videos[1].videoID, "def456")
+        XCTAssertEqual(videos[1].durationSeconds, 125)
+    }
+
+    func testParseVideoListOutput_skipsMalformedRows() {
+        let output = """
+        abc123\tEpisode One\t20260329\t1743206400\t\t300
+        malformed row
+        """
+
+        let videos = Downloader.parseVideoListOutput(output)
+
+        XCTAssertEqual(videos.count, 1)
+        XCTAssertEqual(videos[0].videoID, "abc123")
+    }
 }

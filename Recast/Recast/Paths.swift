@@ -20,6 +20,16 @@ enum Paths {
         appSupport.appendingPathComponent("state.json")
     }
 
+    static var logsDir: URL {
+        let dir = appSupport.appendingPathComponent("logs", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    static var logFile: URL {
+        logsDir.appendingPathComponent("recast.log")
+    }
+
     static var defaultOutputDir: URL {
         let music = fm.urls(for: .musicDirectory, in: .userDomainMask).first
             ?? fm.homeDirectoryForCurrentUser.appendingPathComponent("Music")

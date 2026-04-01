@@ -23,7 +23,7 @@ final class PodcastServer {
         }
         listener?.stateUpdateHandler = { state in
             if case .failed(let err) = state {
-                print("Server error: \(err)")
+                AppLogger.error("Server listener error: \(err)", category: "server")
             }
         }
         listener?.start(queue: queue)
