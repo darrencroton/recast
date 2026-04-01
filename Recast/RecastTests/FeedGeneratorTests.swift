@@ -205,6 +205,23 @@ final class FeedGeneratorTests: XCTestCase {
         XCTAssertTrue(try feedContent().contains("http://localhost:9999/episodes/vid003.mp3"))
     }
 
+    func test_write_enclosureURLIncludesChannelSubfolder() throws {
+        let channel = makeChannel(name: "Science Weekly")
+        let relativePath = Paths.relativeEpisodePath(forFileName: "vid003.mp3", in: channel)
+        let ep = makeEpisode(channelID: channel.id, videoID: "vid003", title: "Test", fileName: relativePath)
+        let fileURL = Paths.episodeFileURL(forRelativePath: relativePath, in: tempDir)
+        try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("mp3".utf8).write(to: fileURL)
+
+        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:9999", to: tempDir)
+
+        let expectedURL = URL(string: "http://localhost:9999")!
+            .appendingPathComponent("episodes", isDirectory: true)
+            .appendingPathComponent(relativePath)
+            .absoluteString
+        XCTAssertTrue(try feedContent().contains(expectedURL))
+    }
+
     func test_write_guidIsVideoID() throws {
         let channel = makeChannel()
         let ep = makeEpisode(channelID: channel.id, videoID: "uniqueGUID99", fileName: "uniqueGUID99.mp3")
@@ -223,11 +240,29 @@ final class FeedGeneratorTests: XCTestCase {
         let channel = makeChannel()
         let ep = makeEpisode(channelID: channel.id, videoID: "art001", fileName: "art001.mp3")
         let artworkURL = Paths.artworkURL(forEpisodeFileName: "art001.mp3", in: tempDir)
+        try FileManager.default.createDirectory(at: artworkURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("jpg".utf8).write(to: artworkURL)
 
         FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
 
         XCTAssertTrue(try feedContent().contains("<itunes:image href=\"http://localhost:8888/episodes/art001.jpg\"/>"))
+    }
+
+    func test_write_includesItemArtworkWhenSidecarExistsInChannelFolder() throws {
+        let channel = makeChannel(name: "Science Weekly")
+        let relativePath = Paths.relativeEpisodePath(forFileName: "art001.mp3", in: channel)
+        let ep = makeEpisode(channelID: channel.id, videoID: "art001", fileName: relativePath)
+        let artworkURL = Paths.artworkURL(forEpisodeFileName: relativePath, in: tempDir)
+        try FileManager.default.createDirectory(at: artworkURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("jpg".utf8).write(to: artworkURL)
+
+        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
+
+        let expectedURL = URL(string: "http://localhost:8888")!
+            .appendingPathComponent("episodes", isDirectory: true)
+            .appendingPathComponent(Episode.artworkFileName(forEpisodeFileName: relativePath))
+            .absoluteString
+        XCTAssertTrue(try feedContent().contains("<itunes:image href=\"\(expectedURL)\"/>"))
     }
 
     func test_write_omitsItemArtworkWhenSidecarMissing() throws {

@@ -24,9 +24,22 @@ struct EpisodeListView: View {
         Dictionary(uniqueKeysWithValues: episodes.map { ($0.id, $0) })
     }
 
+    private var isRefreshingCurrentScope: Bool {
+        if channelIDs.isEmpty {
+            return store.isFetching
+        }
+        return !store.activeRefreshChannelIDs.isDisjoint(with: channelIDs)
+    }
+
     var body: some View {
         Group {
-            if store.filteredEpisodes(for: channelIDs, query: "").isEmpty {
+            if store.filteredEpisodes(for: channelIDs, query: "").isEmpty, isRefreshingCurrentScope {
+                ContentUnavailableView {
+                    Label("Discovering Episodes", systemImage: "arrow.clockwise")
+                } description: {
+                    Text("Fetching episodes for the current selection.")
+                }
+            } else if store.filteredEpisodes(for: channelIDs, query: "").isEmpty {
                 ContentUnavailableView {
                     Label("No Episodes", systemImage: "waveform")
                 } description: {
@@ -58,6 +71,7 @@ struct EpisodeListView: View {
                 })
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .navigationTitle(navigationTitle)
         .onChange(of: visibleEpisodeIDs) { _, newValue in
             selectedEpisodeIDs.formIntersection(newValue)

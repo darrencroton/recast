@@ -48,6 +48,7 @@ You can also manually add the feed URL shown in the status bar or Settings.
 ### Core
 - **Channel management** — Add/remove YouTube channels and playlists
 - **Episode discovery** — Refresh finds new episodes without downloading; you choose what to grab
+- **Responsive refresh** — Discovery uses YouTube playlist metadata for fast first-pass episode detection
 - **Selective download** — Download individual episodes or selected episodes
 - **Download progress** — Per-episode progress weighted toward the final MP3 becoming available
 - **Stop controls** — Stop an individual download from the row/context menu or stop all active downloads from the toolbar when downloads are running
@@ -69,6 +70,7 @@ You can also manually add the feed URL shown in the status bar or Settings.
 ### Convenience
 - **QR code** — One-tap QR code with your feed URL for instant phone setup
 - **Reveal in Finder** — Right-click any downloaded episode to open it in Finder
+- **Channel-organised storage** — Downloaded audio lives under `episodes/<Channel Name [id]>` inside the chosen output folder
 - **Channel monograms** — Visual channel identity with colour-coded initials
 - **Episode deletion** — Remove episodes (and their audio files) from within the app
 - **Diagnostics log** — File-backed logs live at `~/Library/Application Support/Recast/logs/recast.log`
@@ -77,11 +79,13 @@ You can also manually add the feed URL shown in the status bar or Settings.
 
 Open **Recast > Settings** (Cmd+,) to configure:
 - **Episodes folder** — where MP3 files and the feed are stored (default: `~/Music/Recast`)
+  Downloaded episodes are organised under `episodes/<Channel Name [id]>` inside that folder.
 - **Server port** — change the HTTP server port
 - **Auto-start server** — launch the podcast server when the app opens
 - **Auto-fetch interval** — check for new episodes on a schedule
 - **Dependency status** — confirm whether `yt-dlp` and `ffmpeg` are installed
 - **Reset App to Defaults** — clears saved channels, episode state, Recast-managed downloads and feeds, and installed tools while keeping diagnostic logs
+  The next launch will re-download `yt-dlp` and `ffmpeg` as needed.
 
 ## Running Tests
 
@@ -97,7 +101,7 @@ cd Recast
 xcodebuild test -scheme Recast -destination 'platform=macOS'
 ```
 
-The test suite currently covers reset safety, episode models, RSS feed generation, XML escaping, store logic, search filtering, episode management, downloader parsing/cleanup helpers, and persistence hygiene. See `RecastTests/` for details.
+The test suite currently covers reset safety, episode models, RSS feed generation, XML escaping, store logic, search filtering, channel-organised output paths, episode management, downloader parsing/cleanup helpers, and persistence hygiene. See `RecastTests/` for details.
 
 ## CLI Alternative
 

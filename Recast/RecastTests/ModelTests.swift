@@ -90,6 +90,22 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(episode.artworkFileName, "1970-01-01 - Covered Episode [cover1].jpg")
     }
 
+    func testArtworkFileName_preservesRelativeChannelFolder() {
+        var episode = Episode(
+            channelID: UUID(),
+            videoID: "cover2",
+            title: "Covered Episode",
+            publishDate: Date(timeIntervalSince1970: 0),
+            durationSeconds: 60
+        )
+        episode.fileName = "Channel Folder [abc12345]/1970-01-01 - Covered Episode [cover2].mp3"
+
+        XCTAssertEqual(
+            episode.artworkFileName,
+            "Channel Folder [abc12345]/1970-01-01 - Covered Episode [cover2].jpg"
+        )
+    }
+
     // MARK: - Episode Codable (backwards compatibility)
 
     func testEpisodeDecodesWithoutIsPlayed() throws {
@@ -218,6 +234,17 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(Episode.fileDatePrefix(for: videos[0].publishDate), "2026-03-29")
         XCTAssertEqual(videos[1].videoID, "def456")
         XCTAssertEqual(videos[1].durationSeconds, 125)
+    }
+
+    func testParseVideoListOutput_parsesDecimalDurationsFromFlatPlaylist() {
+        let output = """
+        abc123\tEpisode One\t20260329\t1743206400\t\t300.0
+        """
+
+        let videos = Downloader.parseVideoListOutput(output)
+
+        XCTAssertEqual(videos.count, 1)
+        XCTAssertEqual(videos[0].durationSeconds, 300)
     }
 
     func testParseVideoListOutput_skipsMalformedRows() {

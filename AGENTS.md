@@ -58,11 +58,13 @@ The repo-root `setup.sh` delegates to `Recast/setup.sh`. The built app bundle is
 ### Architecture
 - **MVVM**: `AppStore` (@Observable) holds all state; views read from it via `@Environment`
 - **Downloader** (actor): thread-safe yt-dlp/ffmpeg subprocess execution
+- **Discovery**: channel refresh uses yt-dlp playlist metadata for a faster first-pass listing
 - **PodcastServer**: HTTP server using Apple's Network framework on a configurable port (default 8888)
 - **FeedGenerator**: Produces RSS 2.0 with iTunes podcast extensions
 - State persists to `~/Library/Application Support/Recast/state.json`
 - Diagnostics log persists to `~/Library/Application Support/Recast/logs/recast.log`
 - Audio files saved to `~/Music/Recast/` by default
+- Downloaded episodes are stored under `episodes/<Channel Name [id]>` inside the output directory
 
 ### Key Patterns
 - Use `@Observable` macro (not `ObservableObject`) for state
@@ -93,9 +95,9 @@ xcodebuild test -scheme Recast -destination 'platform=macOS'
 The `RecastTests` target uses XCTest with `@testable import Recast`. The suite currently covers:
 
 - **`EpisodeTests`** — `isDownloaded` computed property; `formattedDuration` edge cases (zero, sub-minute, hour boundaries, padding)
-- **`ModelTests`** — filename generation, backwards-compatible episode decoding, publish-date fallbacks, yt-dlp list parsing, downloader progress parsing, and progress weighting helpers
-- **`FeedGeneratorTests`** — `xmlEscape` (all five XML special chars); `formatDuration` (HH:MM:SS); `rfc2822` date format; `write()` end-to-end (file creation, episode inclusion/exclusion, enclosure URLs, GUIDs, XML escaping, input-order preservation)
-- **`StoreTests`** — `normalizeYouTubeURL` (mobile→desktop, `/videos` suffix, playlist URLs, whitespace); `episodes(for:)` (filtering, sort order); filtered counts; `regenerateFeed()` (output file, filtering, sort order, port in URLs); persistence hygiene; downloader artifact cleanup; reset safety for managed cleanup and preservation of unowned artifacts
+- **`ModelTests`** — filename generation, backwards-compatible episode decoding, publish-date fallbacks, yt-dlp list parsing (including flat-playlist duration parsing), downloader progress parsing, and progress weighting helpers
+- **`FeedGeneratorTests`** — `xmlEscape` (all five XML special chars); `formatDuration` (HH:MM:SS); `rfc2822` date format; `write()` end-to-end (file creation, episode inclusion/exclusion, enclosure URLs, GUIDs, XML escaping, input-order preservation, nested episode/artwork paths)
+- **`StoreTests`** — `normalizeYouTubeURL` (mobile→desktop, `/videos` suffix, playlist URLs, whitespace); `episodes(for:)` (filtering, sort order); filtered counts; `regenerateFeed()` (output file, filtering, sort order, port in URLs); persistence hygiene; downloader artifact cleanup; nested output-path cleanup; reset safety for managed cleanup and preservation of unowned artifacts
 
 **What is not tested:** live `yt-dlp`/`ffmpeg` subprocess execution, end-to-end media conversion timing, and `PodcastServer` on real network ports. Downloader parsing/cleanup helpers are unit tested, but real downloads remain integration-test territory.
 

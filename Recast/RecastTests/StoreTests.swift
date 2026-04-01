@@ -334,6 +334,38 @@ final class StoreTests: XCTestCase {
         let ep = makeEpisode(channelID: chID, videoID: "v1", fileName: "v1.mp3")
         store.episodes = [ep]
         let artworkPath = Paths.artworkURL(forEpisodeFileName: "v1.mp3", in: tempDir)
+        try FileManager.default.createDirectory(at: artworkPath.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("fake".utf8).write(to: artworkPath)
+
+        store.deleteEpisodes([ep.id])
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: artworkPath.path))
+    }
+
+    func test_deleteEpisodes_removesNestedMP3File() throws {
+        let channel = makeChannel(name: "Science Weekly")
+        let relativePath = Paths.relativeEpisodePath(forFileName: "v1.mp3", in: channel)
+        let ep = makeEpisode(channelID: channel.id, videoID: "v1", fileName: relativePath)
+        store.channels = [channel]
+        store.episodes = [ep]
+        let mp3Path = Paths.episodeFileURL(forRelativePath: relativePath, in: tempDir)
+        try FileManager.default.createDirectory(at: mp3Path.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("fake".utf8).write(to: mp3Path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: mp3Path.path))
+
+        store.deleteEpisodes([ep.id])
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: mp3Path.path))
+    }
+
+    func test_deleteEpisodes_removesNestedArtworkSidecar() throws {
+        let channel = makeChannel(name: "Science Weekly")
+        let relativePath = Paths.relativeEpisodePath(forFileName: "v1.mp3", in: channel)
+        let ep = makeEpisode(channelID: channel.id, videoID: "v1", fileName: relativePath)
+        store.channels = [channel]
+        store.episodes = [ep]
+        let artworkPath = Paths.artworkURL(forEpisodeFileName: relativePath, in: tempDir)
+        try FileManager.default.createDirectory(at: artworkPath.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("fake".utf8).write(to: artworkPath)
 
         store.deleteEpisodes([ep.id])
@@ -360,6 +392,7 @@ final class StoreTests: XCTestCase {
         store.episodes = [older, newer]
         let olderArtwork = Paths.artworkURL(forEpisodeFileName: "older.mp3", in: tempDir)
         let newerArtwork = Paths.artworkURL(forEpisodeFileName: "newer.mp3", in: tempDir)
+        try FileManager.default.createDirectory(at: olderArtwork.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("old".utf8).write(to: olderArtwork)
         try Data("new".utf8).write(to: newerArtwork)
 
@@ -587,5 +620,29 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: unrelatedAudioFile.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: unrelatedFeedFile.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: episodesDir.path))
+    }
+
+    func test_resetToDefaults_removesNestedManagedArtifactsAndPrunesEmptyChannelFolder() async throws {
+        let customOutputDir = tempDir.appendingPathComponent("nested-output", isDirectory: true)
+        try FileManager.default.createDirectory(at: customOutputDir, withIntermediateDirectories: true)
+
+        let channel = makeChannel(name: "Science Weekly")
+        let relativePath = Paths.relativeEpisodePath(forFileName: "reset-me.mp3", in: channel)
+        let downloadedEpisode = makeEpisode(channelID: channel.id, videoID: "reset-me", fileName: relativePath)
+        store.channels = [channel]
+        store.episodes = [downloadedEpisode]
+        store.outputDirectory = customOutputDir
+
+        let channelDir = Paths.ensureManagedChannelEpisodesDirectory(for: channel, in: customOutputDir)
+        let audioFile = Paths.episodeFileURL(forRelativePath: relativePath, in: customOutputDir)
+        let artworkFile = Paths.artworkURL(forEpisodeFileName: relativePath, in: customOutputDir)
+        try Data("audio".utf8).write(to: audioFile)
+        try Data("art".utf8).write(to: artworkFile)
+
+        await store.resetToDefaults()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: audioFile.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: artworkFile.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: channelDir.path))
     }
 }

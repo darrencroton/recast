@@ -156,7 +156,6 @@ struct Episode: Identifiable, Codable, Hashable {
     }
 
     static func artworkFileName(forEpisodeFileName fileName: String) -> String {
-        let stem = URL(fileURLWithPath: fileName).deletingPathExtension().lastPathComponent
-        return "\(stem).jpg"
+        "\((fileName as NSString).deletingPathExtension).jpg"
     }
 }

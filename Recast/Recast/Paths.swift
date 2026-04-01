@@ -37,15 +37,18 @@ enum Paths {
         return music.appendingPathComponent("Recast", isDirectory: true)
     }
 
+    static func episodesDirectoryURL(in outputDir: URL) -> URL {
+        outputDir.appendingPathComponent("episodes", isDirectory: true)
+    }
+
     static func episodesDir(in outputDir: URL) -> URL {
-        let dir = outputDir.appendingPathComponent("episodes", isDirectory: true)
+        let dir = episodesDirectoryURL(in: outputDir)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
     static func managedEpisodesMarker(in outputDir: URL) -> URL {
-        outputDir
-            .appendingPathComponent("episodes", isDirectory: true)
+        episodesDirectoryURL(in: outputDir)
             .appendingPathComponent(managedEpisodesMarkerFileName)
     }
 
@@ -58,8 +61,40 @@ enum Paths {
         return dir
     }
 
+    static func channelDirectoryName(for channel: Channel) -> String {
+        let readableName = Episode.sanitizedFileComponent(from: channel.name, fallback: "Channel")
+        let idSuffix = String(channel.id.uuidString.lowercased().prefix(8))
+        return "\(readableName) [\(idSuffix)]"
+    }
+
+    static func channelEpisodesDir(for channel: Channel, in outputDir: URL) -> URL {
+        episodesDirectoryURL(in: outputDir)
+            .appendingPathComponent(channelDirectoryName(for: channel), isDirectory: true)
+    }
+
+    static func ensureManagedChannelEpisodesDirectory(for channel: Channel, in outputDir: URL) -> URL {
+        _ = ensureManagedEpisodesDirectory(in: outputDir)
+        let dir = channelEpisodesDir(for: channel, in: outputDir)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    static func relativeEpisodePath(forFileName fileName: String, in channel: Channel) -> String {
+        let channelDir = channelDirectoryName(for: channel)
+        return URL(fileURLWithPath: channelDir, isDirectory: true)
+            .appendingPathComponent(fileName)
+            .path
+    }
+
+    static func episodeFileURL(forRelativePath relativePath: String, in outputDir: URL) -> URL {
+        episodesDirectoryURL(in: outputDir).appendingPathComponent(relativePath)
+    }
+
     static func artworkURL(forEpisodeFileName fileName: String, in outputDir: URL) -> URL {
-        episodesDir(in: outputDir).appendingPathComponent(Episode.artworkFileName(forEpisodeFileName: fileName))
+        episodeFileURL(
+            forRelativePath: Episode.artworkFileName(forEpisodeFileName: fileName),
+            in: outputDir
+        )
     }
 
     static var ytDlpInBin: URL {

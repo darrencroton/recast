@@ -336,6 +336,8 @@ actor Downloader {
             arguments: [
                 "--ignore-errors",
                 "--no-warnings",
+                "--flat-playlist",
+                "--extractor-args", "youtubetab:approximate_date",
                 "--print", "%(id)s\t%(title)s\t%(upload_date)s\t%(timestamp)s\t%(release_timestamp)s\t%(duration)s",
                 "--playlist-end", String(max),
                 channelURL,
@@ -563,10 +565,21 @@ actor Downloader {
                     timestamp: parts[3],
                     releaseTimestamp: parts[4]
                 ),
-                durationSeconds: Int(parts[5]) ?? 0
+                durationSeconds: parseDurationSeconds(parts[5])
             ))
         }
         return results
+    }
+
+    private static func parseDurationSeconds(_ value: String) -> Int {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let seconds = Int(trimmed) {
+            return seconds
+        }
+        if let seconds = Double(trimmed) {
+            return Int(seconds.rounded())
+        }
+        return 0
     }
 
     // MARK: - Process execution

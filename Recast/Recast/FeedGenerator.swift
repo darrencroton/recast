@@ -10,12 +10,12 @@ enum FeedGenerator {
         var items = ""
         for ep in episodes {
             guard let fileName = ep.fileName else { continue }
-            let filePath = Paths.episodesDir(in: outputDir).appendingPathComponent(fileName)
+            let filePath = Paths.episodeFileURL(forRelativePath: fileName, in: outputDir)
             let fileSize = (try? FileManager.default.attributesOfItem(atPath: filePath.path)[.size] as? Int) ?? 0
             let channelName = channels.first(where: { $0.id == ep.channelID })?.name ?? "Unknown"
             let artworkURL = Paths.artworkURL(forEpisodeFileName: fileName, in: outputDir)
             let artworkElement = if FileManager.default.fileExists(atPath: artworkURL.path) {
-                "\n                  <itunes:image href=\"\(xmlEscape(baseURL))/episodes/\(xmlEscape(artworkURL.lastPathComponent))\"/>"
+                "\n                  <itunes:image href=\"\(xmlEscape(resourceURL(baseURL: baseURL, relativePath: Episode.artworkFileName(forEpisodeFileName: fileName))))\"/>"
             } else {
                 ""
             }
@@ -25,7 +25,7 @@ enum FeedGenerator {
                 <item>
                   <title>\(xmlEscape(ep.title))</title>
                   <description>\(xmlEscape("From \(channelName). Watch: https://www.youtube.com/watch?v=\(ep.videoID)"))</description>
-                  <enclosure url="\(xmlEscape(baseURL))/episodes/\(xmlEscape(fileName))" length="\(fileSize)" type="audio/mpeg"/>
+                  <enclosure url="\(xmlEscape(resourceURL(baseURL: baseURL, relativePath: fileName)))" length="\(fileSize)" type="audio/mpeg"/>
                   <guid isPermaLink="false">\(ep.videoID)</guid>
                   <pubDate>\(rfc2822(ep.publishDate))</pubDate>
                   <itunes:duration>\(formatDuration(ep.durationSeconds))</itunes:duration>
@@ -84,5 +84,16 @@ enum FeedGenerator {
         let m = (seconds % 3600) / 60
         let s = seconds % 60
         return String(format: "%02d:%02d:%02d", h, m, s)
+    }
+
+    private static func resourceURL(baseURL: String, relativePath: String) -> String {
+        guard let base = URL(string: baseURL) else {
+            return "\(baseURL)/episodes/\(relativePath)"
+        }
+
+        return base
+            .appendingPathComponent("episodes", isDirectory: true)
+            .appendingPathComponent(relativePath)
+            .absoluteString
     }
 }
