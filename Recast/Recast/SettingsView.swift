@@ -73,7 +73,7 @@ struct SettingsView: View {
             }
 
             Section("Reset") {
-                Text("Remove all channels, episode history, downloaded audio, generated feeds, app data, and settings.")
+                Text("Remove all channels, episode history, Recast-downloaded audio, generated feeds, installed tools, and settings. Diagnostic logs are kept.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 
@@ -95,7 +95,7 @@ struct SettingsView: View {
                 }
             }
         } message: {
-            Text("This will remove all saved channels, episode state, downloaded files, generated feeds, cached app data, and custom settings.")
+            Text("This will remove saved channels, episode state, Recast-managed downloads, generated feeds, installed tools, and custom settings. Diagnostic logs are kept.")
         }
     }
 

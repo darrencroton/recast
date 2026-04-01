@@ -161,6 +161,11 @@ final class FeedGeneratorTests: XCTestCase {
         XCTAssertTrue(try feedContent().contains("xmlns:itunes"))
     }
 
+    func test_write_includesManagedFeedMarker() throws {
+        FeedGenerator.write(episodes: [], channels: [makeChannel()], baseURL: "http://localhost:8888", to: tempDir)
+        XCTAssertTrue(try feedContent().contains(FeedGenerator.managedFeedMarker))
+    }
+
     // MARK: - write(): episode inclusion/exclusion
 
     func test_write_includesEpisodeWithFileName() throws {

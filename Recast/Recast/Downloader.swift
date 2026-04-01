@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 enum DownloaderError: LocalizedError {
@@ -567,8 +568,32 @@ actor Downloader {
         }
     }
 
+    func cancelAllDownloadsAndWait(
+        timeoutNanoseconds: UInt64 = 5_000_000_000,
+        killGraceNanoseconds: UInt64 = 1_000_000_000
+    ) async {
+        cancelAllDownloads()
+        await waitForDownloadsToFinish(timeoutNanoseconds: timeoutNanoseconds)
+
+        guard !runningDownloadProcesses.isEmpty else { return }
+
+        let runningProcesses = Array(runningDownloadProcesses.values)
+        for process in runningProcesses where process.isRunning {
+            kill(process.processIdentifier, SIGKILL)
+        }
+
+        await waitForDownloadsToFinish(timeoutNanoseconds: killGraceNanoseconds)
+    }
+
     private func completeDownload(downloadID: String) -> Bool {
         runningDownloadProcesses.removeValue(forKey: downloadID)
         return cancelledDownloadIDs.remove(downloadID) != nil
+    }
+
+    private func waitForDownloadsToFinish(timeoutNanoseconds: UInt64) async {
+        let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
+        while !runningDownloadProcesses.isEmpty && DispatchTime.now().uptimeNanoseconds < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
     }
 }

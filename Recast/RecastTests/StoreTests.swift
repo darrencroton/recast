@@ -466,10 +466,15 @@ final class StoreTests: XCTestCase {
         store.autoStartServer = true
         store.downloadProgress = ["reset-me": 0.5]
 
-        let episodesDir = Paths.episodesDir(in: customOutputDir)
+        let episodesDir = Paths.ensureManagedEpisodesDirectory(in: customOutputDir)
         let audioFile = episodesDir.appendingPathComponent("reset-me.mp3")
         try Data("audio".utf8).write(to: audioFile)
-        try Data("feed".utf8).write(to: customOutputDir.appendingPathComponent("feed.xml"))
+        FeedGenerator.write(
+            episodes: [downloadedEpisode],
+            channels: [channel],
+            baseURL: "http://localhost:9999",
+            to: customOutputDir
+        )
 
         let binDir = tempAppSupportDir.appendingPathComponent("bin", isDirectory: true)
         let logsDir = tempAppSupportDir.appendingPathComponent("logs", isDirectory: true)
@@ -495,9 +500,11 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.statusMessage, "Ready")
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: audioFile.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: episodesDir.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: customOutputDir.appendingPathComponent("feed.xml").path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: binDir.path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: logsDir.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: logsDir.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: logsDir.appendingPathComponent("recast.log").path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: tempStateFile.path))
 
         let reloadedStore = AppStore(
@@ -514,5 +521,36 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(reloadedStore.serverPort, 8888)
         XCTAssertEqual(reloadedStore.autoFetchInterval, 0)
         XCTAssertFalse(reloadedStore.autoStartServer)
+    }
+
+    func test_resetToDefaults_preservesUnownedOutputArtifacts() async throws {
+        let customOutputDir = tempDir.appendingPathComponent("shared-output", isDirectory: true)
+        try FileManager.default.createDirectory(at: customOutputDir, withIntermediateDirectories: true)
+
+        let channel = makeChannel()
+        let downloadedEpisode = makeEpisode(channelID: channel.id, videoID: "reset-me", fileName: "reset-me.mp3")
+        let partialEpisode = makeEpisode(channelID: channel.id, videoID: "partial-me")
+        store.channels = [channel]
+        store.episodes = [downloadedEpisode, partialEpisode]
+        store.outputDirectory = customOutputDir
+
+        let episodesDir = Paths.ensureManagedEpisodesDirectory(in: customOutputDir)
+        let managedAudioFile = episodesDir.appendingPathComponent("reset-me.mp3")
+        let managedPartialFile = episodesDir.appendingPathComponent("\(String(partialEpisode.suggestedFileName.dropLast(4))).webm")
+        let unrelatedAudioFile = episodesDir.appendingPathComponent("keep-me.mp3")
+        let unrelatedFeedFile = customOutputDir.appendingPathComponent("feed.xml")
+
+        try Data("audio".utf8).write(to: managedAudioFile)
+        try Data("partial".utf8).write(to: managedPartialFile)
+        try Data("keep".utf8).write(to: unrelatedAudioFile)
+        try Data("user feed".utf8).write(to: unrelatedFeedFile)
+
+        await store.resetToDefaults()
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: managedAudioFile.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: managedPartialFile.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelatedAudioFile.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelatedFeedFile.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: episodesDir.path))
     }
 }

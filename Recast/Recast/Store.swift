@@ -35,6 +35,7 @@ final class AppStore {
     private let defaultOutputDirectory: URL
     private let stateFileURL: URL
     private var cancelAllDownloadsRequested = false
+    private var operationGeneration: UInt64 = 0
 
     // MARK: - Init
 
@@ -153,18 +154,33 @@ final class AppStore {
 
     @MainActor
     func installDependencies() async {
+        let operationToken = operationGeneration
         isInstallingDeps = true
         statusMessage = "Installing yt-dlp…"
         AppLogger.info("Installing external dependencies", category: "setup")
         do {
             if !ytDlpReady {
                 try await downloader.installYtDlp()
+                guard isCurrentOperation(operationToken) else {
+                    removeManagedAppSupportArtifacts(removeStateFile: false)
+                    statusMessage = "Ready"
+                    isInstallingDeps = false
+                    await checkDependencies()
+                    return
+                }
                 ytDlpReady = true
                 AppLogger.info("Installed yt-dlp to \(Paths.ytDlpInBin.path)", category: "setup")
             }
             statusMessage = "Installing ffmpeg…"
             if !ffmpegReady {
                 try await downloader.installFfmpeg()
+                guard isCurrentOperation(operationToken) else {
+                    removeManagedAppSupportArtifacts(removeStateFile: false)
+                    statusMessage = "Ready"
+                    isInstallingDeps = false
+                    await checkDependencies()
+                    return
+                }
                 ffmpegReady = true
                 AppLogger.info("Installed ffmpeg to \(Paths.ffmpegInBin.path)", category: "setup")
             }
@@ -181,11 +197,13 @@ final class AppStore {
 
     @MainActor
     func addChannel(url: String) async throws {
+        let operationToken = operationGeneration
         let cleaned = normalizeYouTubeURL(url)
         guard !channels.contains(where: { $0.url == cleaned }) else { return }
         statusMessage = "Resolving channel…"
         AppLogger.info("Adding channel from \(cleaned)", category: "channels")
         let name = try await downloader.resolveChannelName(url: cleaned)
+        guard isCurrentOperation(operationToken) else { return }
         let channel = Channel(url: cleaned, name: name)
         channels.append(channel)
         save()
@@ -206,6 +224,7 @@ final class AppStore {
     @MainActor
     func fetchNewEpisodes(for channelIDs: Set<UUID>) async {
         guard !isFetching else { return }
+        let operationToken = operationGeneration
         isFetching = true
         defer { isFetching = false }
 
@@ -219,9 +238,11 @@ final class AppStore {
         clearNewFlags(for: targetChannelIDs)
 
         for channel in targets {
+            guard isCurrentOperation(operationToken) else { return }
             statusMessage = "Checking \(channel.name)…"
             do {
                 let videos = try await downloader.listVideos(channelURL: channel.url)
+                guard isCurrentOperation(operationToken) else { return }
                 let knownIDs = Set(episodes.filter { $0.channelID == channel.id }.map(\.videoID))
                 AppLogger.info(
                     "Fetched \(videos.count) candidate video(s) for \(channel.name); \(knownIDs.count) already known",
@@ -241,12 +262,14 @@ final class AppStore {
                     totalNew += 1
                 }
             } catch {
+                guard isCurrentOperation(operationToken) else { return }
                 let message = "\(channel.name): \(error.localizedDescription)"
                 fetchErrors.append(message)
                 AppLogger.error("Fetch failed for \(message)", category: "fetch")
             }
         }
 
+        guard isCurrentOperation(operationToken) else { return }
         save()
         if !fetchErrors.isEmpty {
             if totalNew > 0 {
@@ -265,9 +288,11 @@ final class AppStore {
     // MARK: - Download
 
     @MainActor
-    func downloadEpisode(_ episode: Episode) async {
+    func downloadEpisode(_ episode: Episode, operationToken: UInt64? = nil) async {
+        let operationToken = operationToken ?? operationGeneration
+        guard isCurrentOperation(operationToken) else { return }
         guard !activeDownloads.contains(episode.videoID), !episode.isDownloaded else { return }
-        let episodesDir = Paths.episodesDir(in: outputDirectory)
+        let episodesDir = Paths.ensureManagedEpisodesDirectory(in: outputDirectory)
         let videoID = episode.videoID
 
         activeDownloads.insert(videoID)
@@ -281,23 +306,28 @@ final class AppStore {
                 episode: episode,
                 to: episodesDir
             ) { [weak self] pct in
-                Task { @MainActor [weak self, videoID] in
-                    self?.downloadProgress[videoID] = pct
+                Task { @MainActor [weak self, videoID, operationToken] in
+                    guard let self, self.isCurrentOperation(operationToken) else { return }
+                    self.downloadProgress[videoID] = pct
                 }
             }
+            guard isCurrentOperation(operationToken) else { return }
             if let idx = episodes.firstIndex(where: { $0.videoID == videoID }) {
                 episodes[idx].fileName = fileName
             }
             statusMessage = "Downloaded: \(episode.title.prefix(50))"
             AppLogger.info("Downloaded episode \(episode.videoID) to \(fileName)", category: "download")
         } catch DownloaderError.cancelled {
+            guard isCurrentOperation(operationToken) else { return }
             statusMessage = "Stopped: \(episode.title.prefix(50))"
             AppLogger.info("Stopped download for \(episode.videoID)", category: "download")
         } catch {
+            guard isCurrentOperation(operationToken) else { return }
             statusMessage = "Failed: \(episode.title.prefix(40)) — \(error.localizedDescription)"
             AppLogger.error("Download failed for \(episode.videoID): \(error.localizedDescription)", category: "download")
         }
 
+        guard isCurrentOperation(operationToken) else { return }
         activeDownloads.remove(videoID)
         downloadProgress.removeValue(forKey: videoID)
         if activeDownloads.isEmpty {
@@ -308,7 +338,9 @@ final class AppStore {
     }
 
     @MainActor
-    func downloadAllNew(for channelIDs: Set<UUID>) async {
+    func downloadAllNew(for channelIDs: Set<UUID>, operationToken: UInt64? = nil) async {
+        let operationToken = operationToken ?? operationGeneration
+        guard isCurrentOperation(operationToken) else { return }
         cancelAllDownloadsRequested = false
         let targets = sortEpisodesNewestFirst(validEpisodes.filter { ep in
             !ep.isDownloaded &&
@@ -317,13 +349,15 @@ final class AppStore {
         })
 
         for episode in targets {
-            if cancelAllDownloadsRequested { break }
-            await downloadEpisode(episode)
+            guard isCurrentOperation(operationToken), !cancelAllDownloadsRequested else { break }
+            await downloadEpisode(episode, operationToken: operationToken)
         }
     }
 
     @MainActor
-    func downloadEpisodes(_ ids: Set<UUID>) async {
+    func downloadEpisodes(_ ids: Set<UUID>, operationToken: UInt64? = nil) async {
+        let operationToken = operationToken ?? operationGeneration
+        guard isCurrentOperation(operationToken) else { return }
         cancelAllDownloadsRequested = false
         let targets = sortEpisodesNewestFirst(
             validEpisodes.filter {
@@ -334,16 +368,18 @@ final class AppStore {
         )
 
         for episode in targets {
-            if cancelAllDownloadsRequested { break }
-            await downloadEpisode(episode)
+            guard isCurrentOperation(operationToken), !cancelAllDownloadsRequested else { break }
+            await downloadEpisode(episode, operationToken: operationToken)
         }
     }
 
     /// Auto-fetch: discover AND download (background behaviour)
     @MainActor
     func autoFetch() async {
+        let operationToken = operationGeneration
         await fetchNewEpisodes(for: Set())
-        await downloadAllNew(for: Set())
+        guard isCurrentOperation(operationToken) else { return }
+        await downloadAllNew(for: Set(), operationToken: operationToken)
     }
 
     // MARK: - Episode management
@@ -570,6 +606,7 @@ final class AppStore {
     @MainActor
     func resetToDefaults() async {
         AppLogger.warning("Resetting app to default state", category: "store")
+        operationGeneration &+= 1
 
         statusMessage = "Resetting app…"
         cancelAllDownloadsRequested = true
@@ -581,8 +618,7 @@ final class AppStore {
 
         if hasActiveDownloads {
             isStoppingDownloads = true
-            await downloader.cancelAllDownloads()
-            await waitForDownloadsToFinishCancelling()
+            await downloader.cancelAllDownloadsAndWait()
         }
 
         server?.stop()
@@ -590,8 +626,9 @@ final class AppStore {
         isServerRunning = false
 
         let previousOutputDirectory = outputDirectory
-        removeManagedOutputArtifacts(at: previousOutputDirectory)
-        removeAppSupportArtifacts()
+        let previousEpisodes = episodes
+        removeManagedOutputArtifacts(at: previousOutputDirectory, episodes: previousEpisodes)
+        removeManagedAppSupportArtifacts(removeStateFile: true)
 
         channels.removeAll()
         episodes.removeAll()
@@ -601,6 +638,7 @@ final class AppStore {
         autoStartServer = Self.defaultAutoStartServer
         activeDownloads.removeAll()
         downloadProgress.removeAll()
+        cancelAllDownloadsRequested = false
         isStoppingDownloads = false
         statusMessage = "Ready"
 
@@ -625,39 +663,89 @@ final class AppStore {
         return loadedDirectory
     }
 
-    @MainActor
-    private func waitForDownloadsToFinishCancelling(timeoutNanoseconds: UInt64 = 2_000_000_000) async {
-        let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
-        while !activeDownloads.isEmpty && DispatchTime.now().uptimeNanoseconds < deadline {
-            try? await Task.sleep(nanoseconds: 100_000_000)
-        }
+    private func isCurrentOperation(_ token: UInt64) -> Bool {
+        token == operationGeneration
     }
 
-    private func removeManagedOutputArtifacts(at outputDirectory: URL) {
+    private func removeManagedOutputArtifacts(at outputDirectory: URL, episodes: [Episode]) {
         let fileManager = FileManager.default
         let episodesDir = outputDirectory.appendingPathComponent("episodes", isDirectory: true)
         let feedFile = outputDirectory.appendingPathComponent("feed.xml")
 
-        if fileManager.fileExists(atPath: episodesDir.path) {
-            try? fileManager.removeItem(at: episodesDir)
-        }
-        if fileManager.fileExists(atPath: feedFile.path) {
+        if isManagedFeed(at: feedFile) {
             try? fileManager.removeItem(at: feedFile)
+        }
+
+        removeManagedEpisodeArtifacts(for: episodes, in: episodesDir)
+        removeManagedEpisodesDirectoryIfEmptyAndOwned(at: episodesDir)
+    }
+
+    private func removeManagedEpisodeArtifacts(for episodes: [Episode], in episodesDir: URL) {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: episodesDir.path) else { return }
+
+        let downloadedFileNames = Set(episodes.compactMap(\.fileName))
+        for fileName in downloadedFileNames {
+            let fileURL = episodesDir.appendingPathComponent(fileName)
+            if fileManager.fileExists(atPath: fileURL.path) {
+                try? fileManager.removeItem(at: fileURL)
+            }
+        }
+
+        let managedPrefixes = Set(episodes.map { String($0.suggestedFileName.dropLast(4)) })
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: episodesDir,
+            includingPropertiesForKeys: nil,
+            options: []
+        ) else {
+            return
+        }
+
+        for url in contents where managedPrefixes.contains(where: { url.lastPathComponent.hasPrefix($0) }) {
+            try? fileManager.removeItem(at: url)
         }
     }
 
-    private func removeAppSupportArtifacts() {
+    private func removeManagedEpisodesDirectoryIfEmptyAndOwned(at episodesDir: URL) {
         let fileManager = FileManager.default
-        guard fileManager.fileExists(atPath: appSupportURL.path) else { return }
+        guard fileManager.fileExists(atPath: episodesDir.path) else { return }
 
-        if let contents = try? fileManager.contentsOfDirectory(
-            at: appSupportURL,
+        let markerFile = episodesDir.appendingPathComponent(Paths.managedEpisodesMarkerFileName)
+        guard fileManager.fileExists(atPath: markerFile.path) else { return }
+
+        let contents = (try? fileManager.contentsOfDirectory(
+            at: episodesDir,
             includingPropertiesForKeys: nil,
-            options: [.skipsHiddenFiles]
-        ) {
-            for url in contents {
-                try? fileManager.removeItem(at: url)
-            }
+            options: []
+        )) ?? []
+
+        let nonMarkerContents = contents.filter { $0.lastPathComponent != Paths.managedEpisodesMarkerFileName }
+        guard nonMarkerContents.isEmpty else { return }
+
+        try? fileManager.removeItem(at: episodesDir)
+    }
+
+    private func isManagedFeed(at feedFile: URL) -> Bool {
+        guard let content = try? String(contentsOf: feedFile, encoding: .utf8) else { return false }
+
+        if content.contains(FeedGenerator.managedFeedMarker) {
+            return true
+        }
+
+        return content.contains("<title>Recast</title>")
+            && content.contains("<itunes:author>Recast</itunes:author>")
+            && content.contains("<link>https://github.com</link>")
+    }
+
+    private func removeManagedAppSupportArtifacts(removeStateFile: Bool) {
+        let fileManager = FileManager.default
+        let binDir = appSupportURL.appendingPathComponent("bin", isDirectory: true)
+
+        if removeStateFile, fileManager.fileExists(atPath: stateFileURL.path) {
+            try? fileManager.removeItem(at: stateFileURL)
+        }
+        if fileManager.fileExists(atPath: binDir.path) {
+            try? fileManager.removeItem(at: binDir)
         }
     }
 }

@@ -2,6 +2,7 @@ import Foundation
 
 enum Paths {
     private static let fm = FileManager.default
+    static let managedEpisodesMarkerFileName = ".recast-owned"
 
     static var appSupport: URL {
         let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -39,6 +40,21 @@ enum Paths {
     static func episodesDir(in outputDir: URL) -> URL {
         let dir = outputDir.appendingPathComponent("episodes", isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    static func managedEpisodesMarker(in outputDir: URL) -> URL {
+        outputDir
+            .appendingPathComponent("episodes", isDirectory: true)
+            .appendingPathComponent(managedEpisodesMarkerFileName)
+    }
+
+    static func ensureManagedEpisodesDirectory(in outputDir: URL) -> URL {
+        let dir = episodesDir(in: outputDir)
+        let marker = managedEpisodesMarker(in: outputDir)
+        if !fm.fileExists(atPath: marker.path) {
+            fm.createFile(atPath: marker.path, contents: Data())
+        }
         return dir
     }
 
