@@ -140,11 +140,16 @@ struct ContentView: View {
     }
 
     private var mainContent: some View {
-        NavigationSplitView {
-            sidebar
-                .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
-        } detail: {
-            detail
+        VStack(spacing: 0) {
+            NavigationSplitView {
+                sidebar
+                    .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
+            } detail: {
+                detail
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+
+            statusBar
         }
         .searchable(text: $searchQuery, prompt: "Search episodes")
         .toolbar {
@@ -164,9 +169,6 @@ struct ContentView: View {
                 globalActions
                 selectionActions
             }
-        }
-        .safeAreaInset(edge: .bottom, spacing: 0) {
-            statusBar
         }
         .sheet(isPresented: $showAddSheet) {
             AddChannelSheet()
