@@ -1,4 +1,4 @@
-# Recast — Claude Code Guide
+# Recast Agent Guide
 
 ## Project Overview
 
@@ -11,18 +11,20 @@ Recast converts YouTube channels into standard RSS podcast feeds. It has two imp
 
 ```
 recast/
+├── setup.sh                    Repo-root wrapper for build/dev setup
 ├── Recast/
 │   ├── project.yml             XcodeGen project spec
-│   ├── setup.sh                Dependency check + project generation
+│   ├── setup.sh                Generate project + build/reveal Release app bundle
 │   ├── Recast/                 Swift source files
 │   │   ├── RecastApp.swift     App entry point
+│   │   ├── AppLogger.swift     File-backed diagnostics
 │   │   ├── Models.swift        Channel/Episode data models
 │   │   ├── Store.swift         @Observable state + business logic
-│   │   ├── ContentView.swift   Main UI (sidebar + episode list)
+│   │   ├── ContentView.swift   Main UI (sidebar + toolbar + status bar)
 │   │   ├── AddChannelSheet.swift
 │   │   ├── EpisodeListView.swift
 │   │   ├── SettingsView.swift
-│   │   ├── Downloader.swift    Actor: yt-dlp/ffmpeg process management
+│   │   ├── Downloader.swift    Actor: yt-dlp/ffmpeg download + progress/cancel flow
 │   │   ├── FeedGenerator.swift RSS 2.0 feed generation
 │   │   ├── PodcastServer.swift HTTP server (Network framework)
 │   │   ├── Paths.swift         File path utilities
@@ -30,7 +32,9 @@ recast/
 │   └── RecastTests/            XCTest unit tests
 │       ├── EpisodeTests.swift
 │       ├── FeedGeneratorTests.swift
+│       ├── ModelTests.swift
 │       └── StoreTests.swift
+├── Recast.app                  Generated Release app bundle after setup
 ├── cosmic_podcast.py           Python CLI tool
 ├── requirements.txt            Python deps (yt-dlp)
 └── README.md
@@ -45,11 +49,11 @@ recast/
 
 ### Setup & Build
 ```bash
-cd Recast
-./setup.sh          # Installs XcodeGen if needed, generates Recast.xcodeproj
-open Recast.xcodeproj
-# Then Cmd+R in Xcode to build and run
+./setup.sh              # Preferred: generate project, build Release app, reveal Recast.app
+./setup.sh --open-xcode # Same, then open Recast.xcodeproj
 ```
+
+The repo-root `setup.sh` delegates to `Recast/setup.sh`. The built app bundle is copied to `Recast.app` in the repo root for easy tester handoff.
 
 ### Architecture
 - **MVVM**: `AppStore` (@Observable) holds all state; views read from it via `@Environment`
@@ -57,6 +61,7 @@ open Recast.xcodeproj
 - **PodcastServer**: HTTP server using Apple's Network framework on a configurable port (default 8888)
 - **FeedGenerator**: Produces RSS 2.0 with iTunes podcast extensions
 - State persists to `~/Library/Application Support/Recast/state.json`
+- Diagnostics log persists to `~/Library/Application Support/Recast/logs/recast.log`
 - Audio files saved to `~/Music/Recast/` by default
 
 ### Key Patterns
@@ -64,24 +69,34 @@ open Recast.xcodeproj
 - Use `actor` for thread-safe I/O and subprocess management
 - Use `async/await` and `Task {}` for concurrency
 - Error types conform to `LocalizedError`
+- Keep episode ordering newest-first unless a feature explicitly calls for a different presentation
+- The `New` filter is "found in the most recent fetch for the current scope", not "all undownloaded episodes"
+- Selection mode and toolbar actions share state across `ContentView` and `EpisodeListView`; update both when changing filter or batch-action behavior
 
 ### Running Tests
 
 ```bash
-cd Recast
-./setup.sh          # Regenerate project if project.yml has changed
-# Then Cmd+U in Xcode to run the full test suite
+./setup.sh --open-xcode
+# Then Cmd+U in Xcode
 ```
 
-The `RecastTests` target uses XCTest with `@testable import Recast`. 50 tests cover:
+Or from the command line:
+
+```bash
+cd Recast
+xcodebuild test -scheme Recast -destination 'platform=macOS'
+```
+
+The `RecastTests` target uses XCTest with `@testable import Recast`. 102 tests currently cover:
 
 - **`EpisodeTests`** — `isDownloaded` computed property; `formattedDuration` edge cases (zero, sub-minute, hour boundaries, padding)
+- **`ModelTests`** — filename generation, backwards-compatible episode decoding, publish-date fallbacks, yt-dlp list parsing, downloader progress parsing, and progress weighting helpers
 - **`FeedGeneratorTests`** — `xmlEscape` (all five XML special chars); `formatDuration` (HH:MM:SS); `rfc2822` date format; `write()` end-to-end (file creation, episode inclusion/exclusion, enclosure URLs, GUIDs, XML escaping, input-order preservation)
-- **`StoreTests`** — `normalizeYouTubeURL` (mobile→desktop, `/videos` suffix, playlist URLs, whitespace); `episodes(for:)` (filtering, sort order); `regenerateFeed()` (output file, filtering, sort order, port in URLs)
+- **`StoreTests`** — `normalizeYouTubeURL` (mobile→desktop, `/videos` suffix, playlist URLs, whitespace); `episodes(for:)` (filtering, sort order); filtered counts; `regenerateFeed()` (output file, filtering, sort order, port in URLs); persistence hygiene; downloader artifact cleanup
 
-**What is not tested:** `Downloader` (tightly coupled to real `yt-dlp`/`ffmpeg` processes) and `PodcastServer` (requires live network ports). Both are integration-test territory.
+**What is not tested:** live `yt-dlp`/`ffmpeg` subprocess execution, end-to-end media conversion timing, and `PodcastServer` on real network ports. Downloader parsing/cleanup helpers are unit tested, but real downloads remain integration-test territory.
 
-**Testability note:** `FeedGenerator.xmlEscape/rfc2822/formatDuration` and `Store.normalizeYouTubeURL` are `internal` (not `private`) so that `@testable import` can reach them.
+**Testability note:** `FeedGenerator.xmlEscape/rfc2822/formatDuration`, `Store.normalizeYouTubeURL`, and several downloader parsing/cleanup helpers are intentionally not `private` so `@testable import` can reach them.
 
 ## Python CLI
 

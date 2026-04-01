@@ -13,6 +13,8 @@ struct ContentView: View {
     @State private var selection: Set<SidebarItem> = []
     @State private var showAddSheet = false
     @State private var searchQuery = ""
+    @State private var episodeFilter: EpisodeFilter = .all
+    @State private var isEpisodeSelectionMode = false
 
     private var selectedChannelIDs: Set<UUID> {
         var ids = Set<UUID>()
@@ -24,6 +26,18 @@ struct ContentView: View {
 
     private var showingAllEpisodes: Bool {
         selection.contains(.allEpisodes)
+    }
+
+    private var activeChannelScope: Set<UUID> {
+        showingAllEpisodes ? Set() : selectedChannelIDs
+    }
+
+    private var sidebarSummaryTitle: String {
+        episodeFilter.sidebarTitle
+    }
+
+    private var sidebarSummaryCount: Int {
+        store.episodeCount(for: activeChannelScope, query: searchQuery, filter: episodeFilter)
     }
 
     /// Keep sidebar selection mutually exclusive: All Episodes vs individual channels.
@@ -63,7 +77,11 @@ struct ContentView: View {
                 serverToggle
                 qrCodeButton
                 fetchButton
-                downloadAllButton
+                if store.hasActiveDownloads {
+                    stopAllDownloadsButton
+                } else {
+                    downloadAllButton
+                }
                 addButton
             }
         }
@@ -87,9 +105,9 @@ struct ContentView: View {
                 }
                 .listRowSeparator(.hidden)
             } else {
-                Label("All Episodes", systemImage: "rectangle.stack")
+                Label(sidebarSummaryTitle, systemImage: "rectangle.stack")
                     .tag(SidebarItem.allEpisodes)
-                    .badge(store.allEpisodesCount)
+                    .badge(sidebarSummaryCount)
 
                 Section("Channels") {
                     ForEach(store.channels) { channel in
@@ -111,6 +129,7 @@ struct ContentView: View {
         .navigationTitle("Channels")
         .onChange(of: selection) { old, new in
             enforceExclusiveSelection(old: old, new: new)
+            isEpisodeSelectionMode = false
         }
     }
 
@@ -127,7 +146,9 @@ struct ContentView: View {
             } else if showingAllEpisodes || !selectedChannelIDs.isEmpty {
                 EpisodeListView(
                     channelIDs: showingAllEpisodes ? Set() : selectedChannelIDs,
-                    searchQuery: searchQuery
+                    searchQuery: searchQuery,
+                    filterMode: $episodeFilter,
+                    isSelectionMode: $isEpisodeSelectionMode
                 )
             } else {
                 ContentUnavailableView {
@@ -175,8 +196,17 @@ struct ContentView: View {
         } label: {
             Label("Download All", systemImage: "arrow.down.to.line")
         }
-        .disabled(store.channels.isEmpty || !store.activeDownloads.isEmpty)
+        .disabled(store.channels.isEmpty || store.hasActiveDownloads || isEpisodeSelectionMode)
         .help("Download all undownloaded episodes")
+    }
+
+    private var stopAllDownloadsButton: some View {
+        Button(role: .destructive) {
+            store.stopAllDownloads()
+        } label: {
+            Label("Stop All Downloads", systemImage: "stop.circle")
+        }
+        .help("Stop all active downloads")
     }
 
     private var serverToggle: some View {

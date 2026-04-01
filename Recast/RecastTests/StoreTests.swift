@@ -249,6 +249,32 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(result.isEmpty)
     }
 
+    func test_filteredEpisodes_newFilterReturnsOnlyNewEpisodes() {
+        let channel = makeChannel()
+        var newEpisode = makeEpisode(channelID: channel.id, videoID: "new")
+        newEpisode.isNew = true
+        let oldEpisode = makeEpisode(channelID: channel.id, videoID: "old")
+        store.channels = [channel]
+        store.episodes = [newEpisode, oldEpisode]
+
+        let result = store.filteredEpisodes(for: Set(), query: "", filter: .new)
+
+        XCTAssertEqual(result.map(\.videoID), ["new"])
+    }
+
+    func test_episodeCount_usesSelectedFilter() {
+        let channel = makeChannel()
+        var downloaded = makeEpisode(channelID: channel.id, videoID: "downloaded", fileName: "downloaded.mp3")
+        downloaded.isNew = true
+        let pending = makeEpisode(channelID: channel.id, videoID: "pending")
+        store.channels = [channel]
+        store.episodes = [downloaded, pending]
+
+        XCTAssertEqual(store.episodeCount(for: Set(), query: "", filter: .downloaded), 1)
+        XCTAssertEqual(store.episodeCount(for: Set(), query: "", filter: .new), 1)
+        XCTAssertEqual(store.episodeCount(for: Set(), query: "", filter: .all), 2)
+    }
+
     // MARK: - togglePlayed
 
     func test_togglePlayed() {
@@ -392,5 +418,26 @@ final class StoreTests: XCTestCase {
         )
 
         XCTAssertEqual(loadedStore.outputDirectory.standardizedFileURL, Paths.defaultOutputDir.standardizedFileURL)
+    }
+
+    func test_cleanupPartialArtifacts_removesOnlyMatchingFiles() async throws {
+        let channel = makeChannel()
+        let episode = makeEpisode(channelID: channel.id, videoID: "partial")
+        store.channels = [channel]
+        let episodesDir = Paths.episodesDir(in: tempDir)
+
+        let matchingWebm = episodesDir.appendingPathComponent("\(String(episode.suggestedFileName.dropLast(4))).webm")
+        let matchingMP3 = episodesDir.appendingPathComponent(episode.suggestedFileName)
+        let otherFile = episodesDir.appendingPathComponent("keep-me.mp3")
+
+        try Data("partial".utf8).write(to: matchingWebm)
+        try Data("partial".utf8).write(to: matchingMP3)
+        try Data("keep".utf8).write(to: otherFile)
+
+        try await store.downloader.cleanupPartialArtifacts(for: episode, in: episodesDir, moveToTrash: false)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: matchingWebm.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: matchingMP3.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: otherFile.path))
     }
 }

@@ -4,22 +4,90 @@ enum DownloaderError: LocalizedError {
     case dependencyMissing(String)
     case processError(String)
     case parseError
+    case cancelled
 
     var errorDescription: String? {
         switch self {
         case .dependencyMissing(let name): return "\(name) is not available."
         case .processError(let msg): return msg
         case .parseError: return "Failed to parse yt-dlp output."
+        case .cancelled: return "Download cancelled."
         }
     }
 }
 
 actor Downloader {
+    static let downloadPhaseWeight = 0.15
+
     struct ProcessOutput {
         let stdout: String
         let stderr: String
         let terminationStatus: Int32
     }
+
+    private struct ProgressParser {
+        let durationSeconds: Int
+        private let progressPattern = try? NSRegularExpression(pattern: #"(\d+\.?\d*)%"#)
+        private let conversionPattern = try? NSRegularExpression(pattern: #"time=(\d+):(\d+):(\d+(?:\.\d+)?)"#)
+        private var bufferedLine = ""
+        private var latestDownloadProgress = 0.0
+        private var latestConversionProgress = 0.0
+        private var hasSeenConversionProgress = false
+
+        init(durationSeconds: Int) {
+            self.durationSeconds = durationSeconds
+        }
+
+        mutating func ingest(_ text: String) -> [Double] {
+            bufferedLine += text
+            let lines = bufferedLine.components(separatedBy: .newlines)
+            bufferedLine = lines.last ?? ""
+
+            return lines.dropLast().compactMap { line in
+                combinedProgress(for: line)
+            }
+        }
+
+        mutating func finish() -> [Double] {
+            defer { bufferedLine = "" }
+            guard !bufferedLine.isEmpty else { return [] }
+            return combinedProgress(for: bufferedLine).map { [$0] } ?? []
+        }
+
+        private mutating func combinedProgress(for line: String) -> Double? {
+            if let conversionProgress = conversionProgress(for: line) {
+                hasSeenConversionProgress = true
+                latestConversionProgress = max(latestConversionProgress, conversionProgress)
+                return Downloader.displayProgress(
+                    downloadProgress: latestDownloadProgress,
+                    conversionProgress: latestConversionProgress
+                )
+            }
+
+            guard let downloadProgress = downloadProgress(for: line) else { return nil }
+            latestDownloadProgress = max(latestDownloadProgress, downloadProgress)
+            guard !hasSeenConversionProgress else { return nil }
+            return Downloader.displayProgress(
+                downloadProgress: latestDownloadProgress,
+                conversionProgress: nil
+            )
+        }
+
+        private func downloadProgress(for line: String) -> Double? {
+            Downloader.parseDownloadProgress(from: line, with: progressPattern)
+        }
+
+        private func conversionProgress(for line: String) -> Double? {
+            Downloader.parseConversionProgress(
+                from: line,
+                durationSeconds: durationSeconds,
+                with: conversionPattern
+            )
+        }
+    }
+
+    private var runningDownloadProcesses: [String: Process] = [:]
+    private var cancelledDownloadIDs: Set<String> = []
 
     // MARK: - Dependency resolution
 
@@ -184,15 +252,113 @@ actor Downloader {
         args.append("https://www.youtube.com/watch?v=\(episode.videoID)")
 
         if let progress {
-            try await runProcessWithProgress(ytdlp, arguments: args, onProgress: progress)
+            do {
+                try await runProcessWithProgress(
+                    ytdlp,
+                    arguments: args,
+                    downloadID: episode.videoID,
+                    durationSeconds: episode.durationSeconds,
+                    onProgress: progress
+                )
+            } catch {
+                let shouldTrash = if let downloaderError = error as? DownloaderError, case .cancelled = downloaderError {
+                    true
+                } else {
+                    false
+                }
+                try? cleanupPartialArtifacts(for: episode, in: episodesDir, moveToTrash: shouldTrash)
+                throw error
+            }
         } else {
-            _ = try await runProcess(ytdlp, arguments: args)
+            do {
+                _ = try await runProcess(ytdlp, arguments: args)
+            } catch {
+                try? cleanupPartialArtifacts(for: episode, in: episodesDir, moveToTrash: false)
+                throw error
+            }
         }
 
         guard FileManager.default.fileExists(atPath: dest.path) else {
             throw DownloaderError.processError("MP3 file was not created for \(episode.videoID).")
         }
         return fileName
+    }
+
+    func cleanupPartialArtifacts(for episode: Episode, in episodesDir: URL, moveToTrash: Bool) throws {
+        let fileManager = FileManager.default
+        let prefix = String(episode.suggestedFileName.dropLast(4))
+
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: episodesDir,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+
+        for url in contents where url.lastPathComponent.hasPrefix(prefix) {
+            if moveToTrash {
+                if (try? fileManager.trashItem(at: url, resultingItemURL: nil)) == nil {
+                    try? fileManager.removeItem(at: url)
+                }
+            } else {
+                try? fileManager.removeItem(at: url)
+            }
+        }
+    }
+
+    static func displayProgress(downloadProgress: Double, conversionProgress: Double?) -> Double {
+        if let conversionProgress {
+            return downloadPhaseWeight + (min(max(conversionProgress, 0), 1) * (1 - downloadPhaseWeight))
+        }
+        return min(max(downloadProgress, 0), 1) * downloadPhaseWeight
+    }
+
+    static func parseDownloadProgress(from line: String) -> Double? {
+        parseDownloadProgress(from: line, with: try? NSRegularExpression(pattern: #"(\d+\.?\d*)%"#))
+    }
+
+    static func parseConversionProgress(from line: String, durationSeconds: Int) -> Double? {
+        parseConversionProgress(
+            from: line,
+            durationSeconds: durationSeconds,
+            with: try? NSRegularExpression(pattern: #"time=(\d+):(\d+):(\d+(?:\.\d+)?)"#)
+        )
+    }
+
+    private static func parseDownloadProgress(from line: String, with pattern: NSRegularExpression?) -> Double? {
+        guard let pattern else { return nil }
+        let range = NSRange(line.startIndex..., in: line)
+        guard let match = pattern.firstMatch(in: line, range: range),
+              let numberRange = Range(match.range(at: 1), in: line),
+              let percent = Double(line[numberRange])
+        else {
+            return nil
+        }
+
+        return min(percent / 100.0, 1.0)
+    }
+
+    private static func parseConversionProgress(
+        from line: String,
+        durationSeconds: Int,
+        with pattern: NSRegularExpression?
+    ) -> Double? {
+        guard durationSeconds > 0, let pattern else { return nil }
+        let range = NSRange(line.startIndex..., in: line)
+        guard let match = pattern.firstMatch(in: line, range: range),
+              let hoursRange = Range(match.range(at: 1), in: line),
+              let minutesRange = Range(match.range(at: 2), in: line),
+              let secondsRange = Range(match.range(at: 3), in: line),
+              let hours = Double(line[hoursRange]),
+              let minutes = Double(line[minutesRange]),
+              let seconds = Double(line[secondsRange])
+        else {
+            return nil
+        }
+
+        let convertedSeconds = (hours * 3600) + (minutes * 60) + seconds
+        return min(convertedSeconds / Double(durationSeconds), 1.0)
     }
 
     static func publishedDate(uploadDate: String, timestamp: String, releaseTimestamp: String) -> Date {
@@ -234,7 +400,11 @@ actor Downloader {
     static func parseVideoListOutput(_ output: String) -> [VideoInfo] {
         var results: [VideoInfo] = []
         for line in output.split(separator: "\n") {
-            let parts = line.split(separator: "\t", maxSplits: 5).map(String.init)
+            let parts = line.split(
+                separator: "\t",
+                maxSplits: 5,
+                omittingEmptySubsequences: false
+            ).map(String.init)
             guard parts.count >= 6 else { continue }
             results.append(VideoInfo(
                 videoID: parts[0],
@@ -295,55 +465,110 @@ actor Downloader {
     private func runProcessWithProgress(
         _ path: String,
         arguments: [String],
+        downloadID: String,
+        durationSeconds: Int,
         onProgress: @Sendable @escaping (Double) -> Void
     ) async throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = arguments
+
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+
+        runningDownloadProcesses[downloadID] = process
+        cancelledDownloadIDs.remove(downloadID)
+
         try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             DispatchQueue.global(qos: .userInitiated).async {
-                let process = Process()
-                process.executableURL = URL(fileURLWithPath: path)
-                process.arguments = arguments
-                let stdout = Pipe()
-                let stderr = Pipe()
-                process.standardOutput = stdout
-                process.standardError = stderr
-
+                let outputQueue = DispatchQueue(label: "recast.downloader.progress")
                 var stderrText = ""
-                let progressPattern = try? NSRegularExpression(pattern: #"(\d+\.?\d*)%"#)
+                var stdoutText = ""
+                var stdoutParser = ProgressParser(durationSeconds: durationSeconds)
+                var stderrParser = ProgressParser(durationSeconds: durationSeconds)
 
-                stderr.fileHandleForReading.readabilityHandler = { handle in
+                let handleOutput: (FileHandle, Bool) -> Void = { handle, isStandardError in
                     let data = handle.availableData
                     guard !data.isEmpty, let text = String(data: data, encoding: .utf8) else { return }
-                    stderrText += text
-                    // Parse download progress percentages from yt-dlp output
-                    if let progressPattern {
-                        for line in text.components(separatedBy: .newlines) {
-                            let range = NSRange(line.startIndex..., in: line)
-                            if let match = progressPattern.firstMatch(in: line, range: range),
-                               let numRange = Range(match.range(at: 1), in: line) {
-                                if let pct = Double(line[numRange]) {
-                                    onProgress(min(pct / 100.0, 1.0))
-                                }
+
+                    outputQueue.sync {
+                        if isStandardError {
+                            stderrText += text
+                            for value in stderrParser.ingest(text) {
+                                onProgress(value)
+                            }
+                        } else {
+                            stdoutText += text
+                            for value in stdoutParser.ingest(text) {
+                                onProgress(value)
                             }
                         }
                     }
                 }
 
+                stdout.fileHandleForReading.readabilityHandler = { handle in
+                    handleOutput(handle, false)
+                }
+
+                stderr.fileHandleForReading.readabilityHandler = { handle in
+                    handleOutput(handle, true)
+                }
+
                 do {
                     try process.run()
                     process.waitUntilExit()
+                    stdout.fileHandleForReading.readabilityHandler = nil
                     stderr.fileHandleForReading.readabilityHandler = nil
 
-                    if process.terminationStatus == 0 {
-                        continuation.resume(returning: ())
-                    } else {
-                        let msg = stderrText.isEmpty ? "Unknown error" : stderrText
-                        continuation.resume(throwing: DownloaderError.processError(msg))
+                    let finalOutput = outputQueue.sync { () -> (String, String) in
+                        for value in stdoutParser.finish() + stderrParser.finish() {
+                            onProgress(value)
+                        }
+                        return (stdoutText, stderrText)
+                    }
+
+                    Task {
+                        let wasCancelled = await self.completeDownload(downloadID: downloadID)
+                        if process.terminationStatus == 0 {
+                            onProgress(1.0)
+                            continuation.resume(returning: ())
+                        } else if wasCancelled {
+                            continuation.resume(throwing: DownloaderError.cancelled)
+                        } else {
+                            let message = [finalOutput.1, finalOutput.0]
+                                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+                                .first { !$0.isEmpty } ?? "Unknown error"
+                            continuation.resume(throwing: DownloaderError.processError(message))
+                        }
                     }
                 } catch {
+                    stdout.fileHandleForReading.readabilityHandler = nil
                     stderr.fileHandleForReading.readabilityHandler = nil
-                    continuation.resume(throwing: error)
+                    Task {
+                        _ = await self.completeDownload(downloadID: downloadID)
+                        continuation.resume(throwing: error)
+                    }
                 }
             }
         }
+    }
+
+    func cancelDownload(videoID: String) {
+        cancelledDownloadIDs.insert(videoID)
+        runningDownloadProcesses[videoID]?.terminate()
+    }
+
+    func cancelAllDownloads() {
+        for videoID in runningDownloadProcesses.keys {
+            cancelledDownloadIDs.insert(videoID)
+            runningDownloadProcesses[videoID]?.terminate()
+        }
+    }
+
+    private func completeDownload(downloadID: String) -> Bool {
+        runningDownloadProcesses.removeValue(forKey: downloadID)
+        return cancelledDownloadIDs.remove(downloadID) != nil
     }
 }

@@ -4,27 +4,12 @@ struct EpisodeListView: View {
     @Environment(AppStore.self) private var store
     let channelIDs: Set<UUID>
     let searchQuery: String
-
-    @State private var filterMode: EpisodeFilter = .all
-    @State private var isSelectionMode = false
+    @Binding var filterMode: EpisodeFilter
+    @Binding var isSelectionMode: Bool
     @State private var selectedEpisodeIDs: Set<UUID> = []
 
-    enum EpisodeFilter: String, CaseIterable {
-        case all = "All"
-        case downloaded = "Downloaded"
-        case notDownloaded = "New"
-        case unplayed = "Unplayed"
-    }
-
     private var episodes: [Episode] {
-        var result = store.filteredEpisodes(for: channelIDs, query: searchQuery)
-        switch filterMode {
-        case .all: break
-        case .downloaded: result = result.filter(\.isDownloaded)
-        case .notDownloaded: result = result.filter { !$0.isDownloaded }
-        case .unplayed: result = result.filter { !$0.isPlayed && $0.isDownloaded }
-        }
-        return result
+        store.filteredEpisodes(for: channelIDs, query: searchQuery, filter: filterMode)
     }
 
     private var showChannelName: Bool {
@@ -95,11 +80,12 @@ struct EpisodeListView: View {
             ToolbarItemGroup(placement: .primaryAction) {
                 if isSelectionMode {
                     Button {
+                        let targetIDs = selectedEpisodeIDs
                         Task {
-                            await store.downloadEpisodes(selectedEpisodeIDs)
+                            await store.downloadEpisodes(targetIDs)
                             selectedEpisodeIDs = Set(
-                                selectedEpisodes
-                                    .filter { !$0.isDownloaded }
+                                episodes
+                                    .filter { targetIDs.contains($0.id) && !$0.isDownloaded }
                                     .map(\.id)
                             )
                             if selectedEpisodeIDs.isEmpty {
@@ -109,7 +95,10 @@ struct EpisodeListView: View {
                     } label: {
                         Label("Download Selected", systemImage: "arrow.down.circle")
                     }
-                    .disabled(selectedEpisodes.allSatisfy { $0.isDownloaded || store.activeDownloads.contains($0.videoID) })
+                    .disabled(
+                        selectedEpisodes.isEmpty ||
+                        selectedEpisodes.allSatisfy { $0.isDownloaded || store.activeDownloads.contains($0.videoID) }
+                    )
 
                     Button(role: .destructive) {
                         store.deleteEpisodes(selectedEpisodeIDs)
@@ -138,7 +127,13 @@ struct EpisodeListView: View {
 
     @ViewBuilder
     private func episodeContextMenu(for episode: Episode) -> some View {
-        if episode.isDownloaded {
+        if store.activeDownloads.contains(episode.videoID) {
+            Button(role: .destructive) {
+                store.stopDownload(videoID: episode.videoID)
+            } label: {
+                Label("Stop Download", systemImage: "stop.circle")
+            }
+        } else if episode.isDownloaded {
             Button {
                 store.togglePlayed(episode.id)
             } label: {
@@ -199,6 +194,7 @@ struct EpisodeRow: View {
     let isSelectionMode: Bool
     let isSelected: Bool
     @Environment(AppStore.self) private var store
+    @State private var isHoveringActionControl = false
 
     var body: some View {
         HStack(spacing: 12) {
@@ -232,6 +228,10 @@ struct EpisodeRow: View {
             Spacer()
 
             actionAccessory
+                .frame(width: 24, height: 24)
+                .onHover { isHovering in
+                    isHoveringActionControl = isDownloading && isHovering
+                }
         }
         .padding(.vertical, 6)
     }
@@ -239,7 +239,17 @@ struct EpisodeRow: View {
     @ViewBuilder
     private var actionAccessory: some View {
         if isDownloading {
-            if let progress {
+            if isHoveringActionControl {
+                Button(role: .destructive) {
+                    store.stopDownload(videoID: episode.videoID)
+                } label: {
+                    Image(systemName: "stop.circle.fill")
+                        .font(.title3)
+                        .foregroundStyle(.red)
+                }
+                .buttonStyle(.plain)
+                .help("Stop download")
+            } else if let progress {
                 CircularProgressView(progress: progress)
                     .frame(width: 22, height: 22)
             } else {
@@ -250,6 +260,9 @@ struct EpisodeRow: View {
             Image(systemName: episode.isPlayed ? "checkmark.circle" : "checkmark.circle.fill")
                 .font(.title3)
                 .foregroundStyle(episode.isPlayed ? Color.secondary : .green)
+        } else if isSelectionMode {
+            Color.clear
+                .frame(width: 22, height: 22)
         } else {
             Button {
                 Task { await store.downloadEpisode(episode) }

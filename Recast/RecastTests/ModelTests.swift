@@ -18,6 +18,7 @@ final class ModelTests: XCTestCase {
         XCTAssertNil(ep.fileName)
         XCTAssertFalse(ep.isDownloaded)
         XCTAssertFalse(ep.isPlayed)
+        XCTAssertFalse(ep.isNew)
     }
 
     func testEpisodeIsDownloaded() {
@@ -94,6 +95,7 @@ final class ModelTests: XCTestCase {
         let ep = try JSONDecoder().decode(Episode.self, from: data)
         XCTAssertEqual(ep.videoID, "testVid")
         XCTAssertFalse(ep.isPlayed) // defaults to false
+        XCTAssertFalse(ep.isNew)
         XCTAssertNil(ep.fileName)
     }
 
@@ -113,8 +115,26 @@ final class ModelTests: XCTestCase {
         let data = json.data(using: .utf8)!
         let ep = try JSONDecoder().decode(Episode.self, from: data)
         XCTAssertTrue(ep.isPlayed)
+        XCTAssertFalse(ep.isNew)
         XCTAssertTrue(ep.isDownloaded)
         XCTAssertEqual(ep.fileName, "testVid.mp3")
+    }
+
+    func testEpisodeDecodesWithIsNew() throws {
+        let json = """
+        {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "channelID": "22222222-2222-2222-2222-222222222222",
+            "videoID": "freshVid",
+            "title": "Fresh Episode",
+            "publishDate": 0,
+            "durationSeconds": 300,
+            "isNew": true
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let ep = try JSONDecoder().decode(Episode.self, from: data)
+        XCTAssertTrue(ep.isNew)
     }
 
     func testEpisodeRoundTrip() throws {
@@ -124,12 +144,14 @@ final class ModelTests: XCTestCase {
         )
         ep.isPlayed = true
         ep.fileName = "rt1.mp3"
+        ep.isNew = true
 
         let data = try JSONEncoder().encode(ep)
         let decoded = try JSONDecoder().decode(Episode.self, from: data)
         XCTAssertEqual(decoded.videoID, ep.videoID)
         XCTAssertEqual(decoded.title, ep.title)
         XCTAssertEqual(decoded.isPlayed, true)
+        XCTAssertEqual(decoded.isNew, true)
         XCTAssertEqual(decoded.fileName, "rt1.mp3")
     }
 
@@ -195,5 +217,25 @@ final class ModelTests: XCTestCase {
 
         XCTAssertEqual(videos.count, 1)
         XCTAssertEqual(videos[0].videoID, "abc123")
+    }
+
+    func testParseDownloadProgress_readsPercentFromYtDlpLine() {
+        let progress = Downloader.parseDownloadProgress(from: "[download]  42.3% of  100.00MiB at 10.00MiB/s ETA 00:06")
+        XCTAssertNotNil(progress)
+        XCTAssertEqual(progress!, 0.423, accuracy: 0.0001)
+    }
+
+    func testParseConversionProgress_readsFfmpegTimeAgainstDuration() {
+        let progress = Downloader.parseConversionProgress(
+            from: "size=    512kB time=00:01:30.00 bitrate=  46.6kbits/s speed=1.5x",
+            durationSeconds: 180
+        )
+        XCTAssertNotNil(progress)
+        XCTAssertEqual(progress!, 0.5, accuracy: 0.0001)
+    }
+
+    func testDisplayProgress_prioritisesConversionPhase() {
+        let progress = Downloader.displayProgress(downloadProgress: 0.8, conversionProgress: 0.5)
+        XCTAssertEqual(progress, 0.575, accuracy: 0.0001)
     }
 }

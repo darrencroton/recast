@@ -14,6 +14,7 @@ final class AppStore {
     var statusMessage = "Ready"
     var activeDownloads: Set<String> = []       // videoIDs currently downloading
     var downloadProgress: [String: Double] = [:]  // videoID → 0.0…1.0
+    var isStoppingDownloads = false
 
     // Settings
     var autoFetchInterval: Int = 0   // hours; 0 = disabled
@@ -28,6 +29,7 @@ final class AppStore {
     private var server: PodcastServer?
     private var autoFetchTimer: Timer?
     private let stateFileURL: URL
+    private var cancelAllDownloadsRequested = false
 
     // MARK: - Init
 
@@ -187,10 +189,13 @@ final class AppStore {
         guard !isFetching else { return }
         isFetching = true
         let targets = channelIDs.isEmpty ? channels : channels.filter { channelIDs.contains($0.id) }
+        let targetChannelIDs = Set(targets.map(\.id))
 
         var totalNew = 0
         var fetchErrors: [String] = []
         AppLogger.info("Starting fetch for \(targets.count) channel(s)", category: "fetch")
+
+        clearNewFlags(for: targetChannelIDs)
 
         for channel in targets {
             statusMessage = "Checking \(channel.name)…"
@@ -203,13 +208,14 @@ final class AppStore {
                 )
 
                 for video in videos where !knownIDs.contains(video.videoID) {
-                    let ep = Episode(
+                    var ep = Episode(
                         channelID: channel.id,
                         videoID: video.videoID,
                         title: video.title,
                         publishDate: video.publishDate,
                         durationSeconds: video.durationSeconds
                     )
+                    ep.isNew = true
                     episodes.append(ep)
                     totalNew += 1
                 }
@@ -245,6 +251,7 @@ final class AppStore {
 
         activeDownloads.insert(videoID)
         downloadProgress[videoID] = 0
+        isStoppingDownloads = false
         statusMessage = "Downloading: \(episode.title.prefix(50))…"
         AppLogger.info("Downloading episode \(episode.videoID) as \(episode.suggestedFileName)", category: "download")
 
@@ -262,6 +269,9 @@ final class AppStore {
             }
             statusMessage = "Downloaded: \(episode.title.prefix(50))"
             AppLogger.info("Downloaded episode \(episode.videoID) to \(fileName)", category: "download")
+        } catch DownloaderError.cancelled {
+            statusMessage = "Stopped: \(episode.title.prefix(50))"
+            AppLogger.info("Stopped download for \(episode.videoID)", category: "download")
         } catch {
             statusMessage = "Failed: \(episode.title.prefix(40)) — \(error.localizedDescription)"
             AppLogger.error("Download failed for \(episode.videoID): \(error.localizedDescription)", category: "download")
@@ -269,11 +279,15 @@ final class AppStore {
 
         activeDownloads.remove(videoID)
         downloadProgress.removeValue(forKey: videoID)
+        if activeDownloads.isEmpty {
+            isStoppingDownloads = false
+        }
         save()
         regenerateFeed()
     }
 
     func downloadAllNew(for channelIDs: Set<UUID>) async {
+        cancelAllDownloadsRequested = false
         let targets = sortEpisodesNewestFirst(validEpisodes.filter { ep in
             !ep.isDownloaded &&
             !activeDownloads.contains(ep.videoID) &&
@@ -281,11 +295,13 @@ final class AppStore {
         })
 
         for episode in targets {
+            if cancelAllDownloadsRequested { break }
             await downloadEpisode(episode)
         }
     }
 
     func downloadEpisodes(_ ids: Set<UUID>) async {
+        cancelAllDownloadsRequested = false
         let targets = sortEpisodesNewestFirst(
             validEpisodes.filter {
                 ids.contains($0.id) &&
@@ -295,6 +311,7 @@ final class AppStore {
         )
 
         for episode in targets {
+            if cancelAllDownloadsRequested { break }
             await downloadEpisode(episode)
         }
     }
@@ -354,6 +371,24 @@ final class AppStore {
         }
 
         return sortEpisodesNewestFirst(result)
+    }
+
+    func filteredEpisodes(for channelIDs: Set<UUID>, query: String, filter: EpisodeFilter) -> [Episode] {
+        let result = filteredEpisodes(for: channelIDs, query: query)
+        switch filter {
+        case .all:
+            return result
+        case .downloaded:
+            return result.filter(\.isDownloaded)
+        case .new:
+            return result.filter(\.isNew)
+        case .unplayed:
+            return result.filter { !$0.isPlayed && $0.isDownloaded }
+        }
+    }
+
+    func episodeCount(for channelIDs: Set<UUID>, query: String, filter: EpisodeFilter) -> Int {
+        filteredEpisodes(for: channelIDs, query: query, filter: filter).count
     }
 
     // MARK: - Feed
@@ -446,6 +481,10 @@ final class AppStore {
         validEpisodes.count
     }
 
+    var hasActiveDownloads: Bool {
+        !activeDownloads.isEmpty
+    }
+
     func episodes(for channelID: UUID) -> [Episode] {
         sortEpisodesNewestFirst(validEpisodes.filter { $0.channelID == channelID })
     }
@@ -474,6 +513,34 @@ final class AppStore {
         let knownChannelIDs = Set(channels.map(\.id))
         guard !knownChannelIDs.isEmpty else { return episodes }
         return episodes.filter { knownChannelIDs.contains($0.channelID) }
+    }
+
+    private func clearNewFlags(for channelIDs: Set<UUID>) {
+        guard !channelIDs.isEmpty else { return }
+        for index in episodes.indices where channelIDs.contains(episodes[index].channelID) {
+            episodes[index].isNew = false
+        }
+    }
+
+    func stopDownload(videoID: String) {
+        guard activeDownloads.contains(videoID) else { return }
+        statusMessage = "Stopping download…"
+        isStoppingDownloads = true
+        AppLogger.info("Requesting stop for \(videoID)", category: "download")
+        Task {
+            await downloader.cancelDownload(videoID: videoID)
+        }
+    }
+
+    func stopAllDownloads() {
+        guard hasActiveDownloads else { return }
+        cancelAllDownloadsRequested = true
+        isStoppingDownloads = true
+        statusMessage = "Stopping downloads…"
+        AppLogger.info("Requesting stop for all downloads", category: "download")
+        Task {
+            await downloader.cancelAllDownloads()
+        }
     }
 
     private func pruneEpisodesWithoutChannels() -> Bool {

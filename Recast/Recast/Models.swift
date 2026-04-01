@@ -1,5 +1,25 @@
 import Foundation
 
+enum EpisodeFilter: String, CaseIterable {
+    case all = "All"
+    case downloaded = "Downloaded"
+    case new = "New"
+    case unplayed = "Unplayed"
+
+    var sidebarTitle: String {
+        switch self {
+        case .all:
+            return "All Episodes"
+        case .downloaded:
+            return "Downloaded"
+        case .new:
+            return "New"
+        case .unplayed:
+            return "Unplayed"
+        }
+    }
+}
+
 struct Channel: Identifiable, Codable, Hashable {
     var id: UUID
     var url: String
@@ -23,6 +43,7 @@ struct Episode: Identifiable, Codable, Hashable {
     var durationSeconds: Int
     var fileName: String?
     var isPlayed: Bool
+    var isNew: Bool
 
     var isDownloaded: Bool { fileName != nil }
 
@@ -34,11 +55,12 @@ struct Episode: Identifiable, Codable, Hashable {
         self.publishDate = publishDate
         self.durationSeconds = durationSeconds
         self.isPlayed = false
+        self.isNew = false
     }
 
     // Backwards-compatible decoding: isPlayed defaults to false if missing
     enum CodingKeys: String, CodingKey {
-        case id, channelID, videoID, title, publishDate, durationSeconds, fileName, isPlayed
+        case id, channelID, videoID, title, publishDate, durationSeconds, fileName, isPlayed, isNew
     }
 
     init(from decoder: Decoder) throws {
@@ -51,6 +73,7 @@ struct Episode: Identifiable, Codable, Hashable {
         durationSeconds = try c.decode(Int.self, forKey: .durationSeconds)
         fileName = try c.decodeIfPresent(String.self, forKey: .fileName)
         isPlayed = try c.decodeIfPresent(Bool.self, forKey: .isPlayed) ?? false
+        isNew = try c.decodeIfPresent(Bool.self, forKey: .isNew) ?? false
     }
 
     var formattedDuration: String {

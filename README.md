@@ -23,11 +23,13 @@ If you also want the Xcode project opened for development, run:
 
 **Requirements:** macOS 14+, Xcode 15+. The app automatically downloads `yt-dlp` and `ffmpeg` on first launch — no terminal setup needed.
 
+For day-to-day development, the repo-root `./setup.sh` is the intended entry point. It delegates to `Recast/setup.sh`, regenerates the Xcode project, builds a fresh Release app bundle, and reveals `Recast.app` in Finder.
+
 ## How It Works
 
 1. **Add channels** — Press `+` and paste a YouTube channel or playlist URL
 2. **Fetch episodes** — Press Fetch to discover new episodes across your channels
-3. **Download what you want** — Download individual episodes or hit Download All
+3. **Download what you want** — Download individual episodes, use Select mode for batch actions, or hit Download All
 4. **Subscribe** — Start the built-in podcast server and scan the QR code from your phone
 
 ## Subscribe on Your Phone
@@ -46,15 +48,17 @@ You can also manually add the feed URL shown in the status bar or Settings.
 ### Core
 - **Channel management** — Add/remove YouTube channels and playlists
 - **Episode discovery** — Fetch lists new episodes without downloading; you choose what to grab
-- **Selective download** — Download individual episodes or all at once
-- **Download progress** — Real-time percentage progress for each download
+- **Selective download** — Download individual episodes, selected episodes, or all available episodes
+- **Download progress** — Per-episode progress weighted toward the final MP3 becoming available
+- **Stop controls** — Stop an individual download from the row/context menu or stop all downloads from the toolbar
 - **Podcast feed** — Standard RSS 2.0 with iTunes extensions, compatible with all podcast apps
 - **Built-in server** — HTTP server hosts your feed on the local network
 
 ### Search & Browse
 - **All Episodes view** — See every episode across all channels in one list
 - **Search** — Filter episodes by title across all channels
-- **Episode filters** — Quick-filter by All, Downloaded, New (undownloaded), or Unplayed
+- **Episode filters** — Quick-filter by All, Downloaded, New (found in the latest fetch for the current scope), or Unplayed
+- **Selection mode** — Batch-select episodes for download or deletion
 - **Played/Unplayed** — Mark episodes to track what you've listened to
 
 ### Automation
@@ -66,6 +70,7 @@ You can also manually add the feed URL shown in the status bar or Settings.
 - **Reveal in Finder** — Right-click any downloaded episode to open it in Finder
 - **Channel monograms** — Visual channel identity with colour-coded initials
 - **Episode deletion** — Remove episodes (and their audio files) from within the app
+- **Diagnostics log** — File-backed logs live at `~/Library/Application Support/Recast/logs/recast.log`
 
 ## Settings
 
@@ -74,6 +79,7 @@ Open **Recast > Settings** (Cmd+,) to configure:
 - **Server port** — change the HTTP server port
 - **Auto-start server** — launch the podcast server when the app opens
 - **Auto-fetch interval** — check for new episodes on a schedule
+- **Dependency status** — confirm whether `yt-dlp` and `ffmpeg` are installed
 
 ## Running Tests
 
@@ -89,7 +95,7 @@ cd Recast
 xcodebuild test -scheme Recast -destination 'platform=macOS'
 ```
 
-The test suite covers episode models, RSS feed generation, XML escaping, store logic, search filtering, and episode management. See `RecastTests/` for details.
+The test suite currently covers 102 XCTest cases across episode models, RSS feed generation, XML escaping, store logic, search filtering, episode management, downloader parsing/cleanup helpers, and persistence hygiene. See `RecastTests/` for details.
 
 ## CLI Alternative
 
@@ -108,13 +114,14 @@ See `cosmic_podcast.py --help` for options.
 Recast/               macOS SwiftUI app
 ├── Recast/           Source files
 │   ├── RecastApp.swift       App entry point
+│   ├── AppLogger.swift       File-backed app diagnostics
 │   ├── Models.swift          Channel & Episode data models
 │   ├── Store.swift           App state, persistence, business logic
 │   ├── ContentView.swift     Main UI: sidebar, toolbar, QR code, status bar
 │   ├── EpisodeListView.swift Episode list, filters, context menus, progress
 │   ├── AddChannelSheet.swift Add-channel modal
 │   ├── SettingsView.swift    Preferences window
-│   ├── Downloader.swift      yt-dlp/ffmpeg wrapper with progress streaming
+│   ├── Downloader.swift      yt-dlp/ffmpeg wrapper with progress/cancellation
 │   ├── FeedGenerator.swift   RSS feed builder
 │   ├── PodcastServer.swift   HTTP server (NWListener)
 │   └── Paths.swift           File path management
