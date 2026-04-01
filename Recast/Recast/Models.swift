@@ -20,6 +20,37 @@ enum EpisodeFilter: String, CaseIterable {
     }
 }
 
+enum DownloadPhase: Equatable {
+    case preparing
+    case fetchingArtwork
+    case downloadingAudio
+    case convertingAudio
+    case embeddingMetadata
+    case embeddingArtwork
+
+    var label: String {
+        switch self {
+        case .preparing:
+            return "Preparing download"
+        case .fetchingArtwork:
+            return "Fetching artwork"
+        case .downloadingAudio:
+            return "Downloading source audio"
+        case .convertingAudio:
+            return "Converting to MP3"
+        case .embeddingMetadata:
+            return "Embedding metadata"
+        case .embeddingArtwork:
+            return "Embedding artwork"
+        }
+    }
+}
+
+struct DownloadStatus: Equatable {
+    var progress: Double
+    var phase: DownloadPhase
+}
+
 struct Channel: Identifiable, Codable, Hashable {
     var id: UUID
     var url: String
@@ -46,6 +77,10 @@ struct Episode: Identifiable, Codable, Hashable {
     var isNew: Bool
 
     var isDownloaded: Bool { fileName != nil }
+    var artworkFileName: String? {
+        guard let fileName else { return nil }
+        return Self.artworkFileName(forEpisodeFileName: fileName)
+    }
 
     init(channelID: UUID, videoID: String, title: String, publishDate: Date, durationSeconds: Int) {
         self.id = UUID()
@@ -115,5 +150,10 @@ struct Episode: Identifiable, Codable, Hashable {
             components.month ?? 1,
             components.day ?? 1
         )
+    }
+
+    static func artworkFileName(forEpisodeFileName fileName: String) -> String {
+        let stem = URL(fileURLWithPath: fileName).deletingPathExtension().lastPathComponent
+        return "\(stem).jpg"
     }
 }

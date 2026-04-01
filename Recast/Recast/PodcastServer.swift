@@ -112,6 +112,9 @@ final class PodcastServer {
         switch ext.lowercased() {
         case "xml": return "application/rss+xml; charset=utf-8"
         case "mp3": return "audio/mpeg"
+        case "jpg", "jpeg": return "image/jpeg"
+        case "png": return "image/png"
+        case "webp": return "image/webp"
         case "json": return "application/json"
         default: return "application/octet-stream"
         }

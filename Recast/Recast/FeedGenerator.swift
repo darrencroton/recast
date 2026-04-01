@@ -13,6 +13,12 @@ enum FeedGenerator {
             let filePath = Paths.episodesDir(in: outputDir).appendingPathComponent(fileName)
             let fileSize = (try? FileManager.default.attributesOfItem(atPath: filePath.path)[.size] as? Int) ?? 0
             let channelName = channels.first(where: { $0.id == ep.channelID })?.name ?? "Unknown"
+            let artworkURL = Paths.artworkURL(forEpisodeFileName: fileName, in: outputDir)
+            let artworkElement = if FileManager.default.fileExists(atPath: artworkURL.path) {
+                "\n                  <itunes:image href=\"\(xmlEscape(baseURL))/episodes/\(xmlEscape(artworkURL.lastPathComponent))\"/>"
+            } else {
+                ""
+            }
 
             items += """
 
@@ -23,7 +29,7 @@ enum FeedGenerator {
                   <guid isPermaLink="false">\(ep.videoID)</guid>
                   <pubDate>\(rfc2822(ep.publishDate))</pubDate>
                   <itunes:duration>\(formatDuration(ep.durationSeconds))</itunes:duration>
-                  <itunes:author>\(xmlEscape(channelName))</itunes:author>
+                  <itunes:author>\(xmlEscape(channelName))</itunes:author>\(artworkElement)
                   <link>https://www.youtube.com/watch?v=\(ep.videoID)</link>
                 </item>
             """

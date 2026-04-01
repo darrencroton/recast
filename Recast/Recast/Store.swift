@@ -14,9 +14,12 @@ final class AppStore {
     var serverPort: Int = 8888
     var isServerRunning = false
     var isFetching = false
+    var isStoppingFetch = false
+    var activeRefreshChannelIDs: Set<UUID> = []
+    var currentRefreshChannelID: UUID?
     var statusMessage = "Ready"
     var activeDownloads: Set<String> = []       // videoIDs currently downloading
-    var downloadProgress: [String: Double] = [:]  // videoID → 0.0…1.0
+    var activeDownloadStatus: [String: DownloadStatus] = [:]
     var isStoppingDownloads = false
 
     // Settings
@@ -222,27 +225,42 @@ final class AppStore {
     // MARK: - Fetch (discover only — no downloads)
 
     @MainActor
-    func fetchNewEpisodes(for channelIDs: Set<UUID>) async {
-        guard !isFetching else { return }
+    @discardableResult
+    func fetchNewEpisodes(for channelIDs: Set<UUID>) async -> Bool {
+        guard !isFetching else { return false }
         let operationToken = operationGeneration
         isFetching = true
-        defer { isFetching = false }
+        isStoppingFetch = false
+        currentRefreshChannelID = nil
+        defer {
+            isFetching = false
+            isStoppingFetch = false
+            activeRefreshChannelIDs.removeAll()
+            currentRefreshChannelID = nil
+        }
 
         let targets = channelIDs.isEmpty ? channels : channels.filter { channelIDs.contains($0.id) }
         let targetChannelIDs = Set(targets.map(\.id))
+        activeRefreshChannelIDs = targetChannelIDs
 
         var totalNew = 0
         var fetchErrors: [String] = []
+        var wasCancelled = false
         AppLogger.info("Starting fetch for \(targets.count) channel(s)", category: "fetch")
 
         clearNewFlags(for: targetChannelIDs)
 
         for channel in targets {
-            guard isCurrentOperation(operationToken) else { return }
+            if isStoppingFetch {
+                wasCancelled = true
+                break
+            }
+            guard isCurrentOperation(operationToken) else { return false }
+            currentRefreshChannelID = channel.id
             statusMessage = "Checking \(channel.name)…"
             do {
                 let videos = try await downloader.listVideos(channelURL: channel.url)
-                guard isCurrentOperation(operationToken) else { return }
+                guard isCurrentOperation(operationToken) else { return false }
                 let knownIDs = Set(episodes.filter { $0.channelID == channel.id }.map(\.videoID))
                 AppLogger.info(
                     "Fetched \(videos.count) candidate video(s) for \(channel.name); \(knownIDs.count) already known",
@@ -261,17 +279,26 @@ final class AppStore {
                     episodes.append(ep)
                     totalNew += 1
                 }
+            } catch DownloaderError.cancelled {
+                guard isCurrentOperation(operationToken) else { return false }
+                wasCancelled = true
+                AppLogger.info("Stopped fetch while checking \(channel.name)", category: "fetch")
+                break
             } catch {
-                guard isCurrentOperation(operationToken) else { return }
+                guard isCurrentOperation(operationToken) else { return false }
                 let message = "\(channel.name): \(error.localizedDescription)"
                 fetchErrors.append(message)
                 AppLogger.error("Fetch failed for \(message)", category: "fetch")
             }
         }
 
-        guard isCurrentOperation(operationToken) else { return }
+        guard isCurrentOperation(operationToken) else { return false }
         save()
-        if !fetchErrors.isEmpty {
+        if wasCancelled {
+            statusMessage = totalNew > 0
+                ? "Stopped refresh after finding \(totalNew) new episode(s)"
+                : "Refresh stopped"
+        } else if !fetchErrors.isEmpty {
             if totalNew > 0 {
                 statusMessage = "Found \(totalNew) new episode(s); \(fetchErrors.count) channel fetch failed"
             } else {
@@ -283,6 +310,7 @@ final class AppStore {
             statusMessage = totalNew > 0 ? "Found \(totalNew) new episode(s)" : "No new episodes"
         }
         AppLogger.info(statusMessage, category: "fetch")
+        return !wasCancelled
     }
 
     // MARK: - Download
@@ -296,7 +324,7 @@ final class AppStore {
         let videoID = episode.videoID
 
         activeDownloads.insert(videoID)
-        downloadProgress[videoID] = 0
+        activeDownloadStatus[videoID] = DownloadStatus(progress: 0, phase: .preparing)
         isStoppingDownloads = false
         statusMessage = "Downloading: \(episode.title.prefix(50))…"
         AppLogger.info("Downloading episode \(episode.videoID) as \(episode.suggestedFileName)", category: "download")
@@ -305,10 +333,13 @@ final class AppStore {
             let fileName = try await downloader.downloadAudio(
                 episode: episode,
                 to: episodesDir
-            ) { [weak self] pct in
+            ) { [weak self] update in
                 Task { @MainActor [weak self, videoID, operationToken] in
                     guard let self, self.isCurrentOperation(operationToken) else { return }
-                    self.downloadProgress[videoID] = pct
+                    self.activeDownloadStatus[videoID] = DownloadStatus(
+                        progress: update.progress,
+                        phase: update.phase
+                    )
                 }
             }
             guard isCurrentOperation(operationToken) else { return }
@@ -329,7 +360,7 @@ final class AppStore {
 
         guard isCurrentOperation(operationToken) else { return }
         activeDownloads.remove(videoID)
-        downloadProgress.removeValue(forKey: videoID)
+        activeDownloadStatus.removeValue(forKey: videoID)
         if activeDownloads.isEmpty {
             isStoppingDownloads = false
         }
@@ -377,8 +408,8 @@ final class AppStore {
     @MainActor
     func autoFetch() async {
         let operationToken = operationGeneration
-        await fetchNewEpisodes(for: Set())
-        guard isCurrentOperation(operationToken) else { return }
+        let didCompleteFetch = await fetchNewEpisodes(for: Set())
+        guard didCompleteFetch, isCurrentOperation(operationToken) else { return }
         await downloadAllNew(for: Set(), operationToken: operationToken)
     }
 
@@ -386,14 +417,10 @@ final class AppStore {
 
     func deleteEpisodes(_ ids: Set<UUID>) {
         AppLogger.info("Deleting \(ids.count) episode(s)", category: "episodes")
-        let fm = FileManager.default
         let episodesDir = Paths.episodesDir(in: outputDirectory)
-        for ep in episodes where ids.contains(ep.id) {
-            if let fileName = ep.fileName {
-                let file = episodesDir.appendingPathComponent(fileName)
-                try? fm.removeItem(at: file)
-            }
-        }
+        let targetEpisodes = episodes.filter { ids.contains($0.id) }
+        removeManagedEpisodeArtifacts(for: targetEpisodes, in: episodesDir)
+        removeManagedEpisodesDirectoryIfEmptyAndOwned(at: episodesDir)
         episodes.removeAll { ids.contains($0.id) }
         save()
         regenerateFeed()
@@ -449,6 +476,26 @@ final class AppStore {
 
     func episodeCount(for channelIDs: Set<UUID>, query: String, filter: EpisodeFilter) -> Int {
         filteredEpisodes(for: channelIDs, query: query, filter: filter).count
+    }
+
+    func artworkURL(for episode: Episode) -> URL? {
+        guard let fileName = episode.fileName else { return nil }
+        let artworkURL = Paths.artworkURL(forEpisodeFileName: fileName, in: outputDirectory)
+        guard FileManager.default.fileExists(atPath: artworkURL.path) else { return nil }
+        return artworkURL
+    }
+
+    func downloadStatus(for episode: Episode) -> DownloadStatus? {
+        activeDownloadStatus[episode.videoID]
+    }
+
+    func channelArtworkURL(for channelID: UUID) -> URL? {
+        for episode in episodes(for: channelID) {
+            if let artworkURL = artworkURL(for: episode) {
+                return artworkURL
+            }
+        }
+        return nil
     }
 
     // MARK: - Feed
@@ -545,6 +592,15 @@ final class AppStore {
         !activeDownloads.isEmpty
     }
 
+    var activeDownloadEpisodes: [Episode] {
+        sortEpisodesNewestFirst(validEpisodes.filter { activeDownloadStatus[$0.videoID] != nil })
+    }
+
+    var currentRefreshChannelName: String? {
+        guard let currentRefreshChannelID else { return nil }
+        return channels.first(where: { $0.id == currentRefreshChannelID })?.name
+    }
+
     func episodes(for channelID: UUID) -> [Episode] {
         sortEpisodesNewestFirst(validEpisodes.filter { $0.channelID == channelID })
     }
@@ -603,6 +659,16 @@ final class AppStore {
         }
     }
 
+    func stopFetch() {
+        guard isFetching, !isStoppingFetch else { return }
+        statusMessage = "Stopping refresh…"
+        isStoppingFetch = true
+        AppLogger.info("Requesting stop for current fetch", category: "fetch")
+        Task {
+            await downloader.cancelFetch()
+        }
+    }
+
     @MainActor
     func resetToDefaults() async {
         AppLogger.warning("Resetting app to default state", category: "store")
@@ -610,7 +676,13 @@ final class AppStore {
 
         statusMessage = "Resetting app…"
         cancelAllDownloadsRequested = true
+        if isFetching {
+            await downloader.cancelFetch()
+        }
         isFetching = false
+        isStoppingFetch = false
+        activeRefreshChannelIDs.removeAll()
+        currentRefreshChannelID = nil
         isInstallingDeps = false
 
         autoFetchTimer?.invalidate()
@@ -637,7 +709,7 @@ final class AppStore {
         autoFetchInterval = Self.defaultAutoFetchInterval
         autoStartServer = Self.defaultAutoStartServer
         activeDownloads.removeAll()
-        downloadProgress.removeAll()
+        activeDownloadStatus.removeAll()
         cancelAllDownloadsRequested = false
         isStoppingDownloads = false
         statusMessage = "Ready"
@@ -689,6 +761,14 @@ final class AppStore {
             let fileURL = episodesDir.appendingPathComponent(fileName)
             if fileManager.fileExists(atPath: fileURL.path) {
                 try? fileManager.removeItem(at: fileURL)
+            }
+        }
+
+        let downloadedArtworkFileNames = Set(episodes.compactMap(\.artworkFileName))
+        for artworkFileName in downloadedArtworkFileNames {
+            let artworkURL = episodesDir.appendingPathComponent(artworkFileName)
+            if fileManager.fileExists(atPath: artworkURL.path) {
+                try? fileManager.removeItem(at: artworkURL)
             }
         }
 

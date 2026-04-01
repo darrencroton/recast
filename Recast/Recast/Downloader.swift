@@ -18,12 +18,15 @@ enum DownloaderError: LocalizedError {
 }
 
 actor Downloader {
-    static let downloadPhaseWeight = 0.15
-
     struct ProcessOutput {
         let stdout: String
         let stderr: String
         let terminationStatus: Int32
+    }
+
+    struct ProgressUpdate: Equatable {
+        let progress: Double
+        let phase: DownloadPhase
     }
 
     private struct ProgressParser {
@@ -33,45 +36,93 @@ actor Downloader {
         private var bufferedLine = ""
         private var latestDownloadProgress = 0.0
         private var latestConversionProgress = 0.0
+        private var latestPreparingProgress = 0.0
+        private var latestArtworkProgress = 0.0
+        private var currentPhase: DownloadPhase = .preparing
+        private var conversionStartedAt: Date?
         private var hasSeenConversionProgress = false
+        private var lastEmittedUpdate: ProgressUpdate?
 
         init(durationSeconds: Int) {
             self.durationSeconds = durationSeconds
         }
 
-        mutating func ingest(_ text: String) -> [Double] {
+        mutating func ingest(_ text: String) -> [ProgressUpdate] {
             bufferedLine += text
             let lines = bufferedLine.components(separatedBy: .newlines)
             bufferedLine = lines.last ?? ""
 
             return lines.dropLast().compactMap { line in
-                combinedProgress(for: line)
+                handle(line)
             }
         }
 
-        mutating func finish() -> [Double] {
+        mutating func finish() -> [ProgressUpdate] {
             defer { bufferedLine = "" }
-            guard !bufferedLine.isEmpty else { return [] }
-            return combinedProgress(for: bufferedLine).map { [$0] } ?? []
+            var updates: [ProgressUpdate] = []
+            if !bufferedLine.isEmpty, let update = handle(bufferedLine) {
+                updates.append(update)
+            }
+            if let update = emitCurrentIfNeeded() {
+                updates.append(update)
+            }
+            return updates
         }
 
-        private mutating func combinedProgress(for line: String) -> Double? {
+        mutating func heartbeat() -> ProgressUpdate? {
+            emitCurrentIfNeeded()
+        }
+
+        private mutating func handle(_ line: String) -> ProgressUpdate? {
+            let trimmed = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else { return nil }
+
+            if updateArtworkPhase(for: trimmed) {
+                return emitCurrentIfNeeded()
+            }
+
+            if updatePreparingPhase(for: trimmed) {
+                return emitCurrentIfNeeded()
+            }
+
+            if trimmed.hasPrefix("[download] Destination:") || trimmed.hasPrefix("[download] ") {
+                currentPhase = .downloadingAudio
+            }
+
             if let conversionProgress = conversionProgress(for: line) {
+                currentPhase = .convertingAudio
+                if conversionStartedAt == nil {
+                    conversionStartedAt = .now
+                }
                 hasSeenConversionProgress = true
                 latestConversionProgress = max(latestConversionProgress, conversionProgress)
-                return Downloader.displayProgress(
-                    downloadProgress: latestDownloadProgress,
-                    conversionProgress: latestConversionProgress
-                )
+                return emitCurrentIfNeeded()
             }
 
-            guard let downloadProgress = downloadProgress(for: line) else { return nil }
-            latestDownloadProgress = max(latestDownloadProgress, downloadProgress)
-            guard !hasSeenConversionProgress else { return nil }
-            return Downloader.displayProgress(
-                downloadProgress: latestDownloadProgress,
-                conversionProgress: nil
-            )
+            if trimmed.hasPrefix("[ExtractAudio] Destination:") {
+                currentPhase = .convertingAudio
+                if conversionStartedAt == nil {
+                    conversionStartedAt = .now
+                }
+                return emitCurrentIfNeeded()
+            }
+
+            if trimmed.hasPrefix("[Metadata] Adding metadata") {
+                currentPhase = .embeddingMetadata
+                return emitCurrentIfNeeded()
+            }
+
+            if trimmed.hasPrefix("[EmbedThumbnail]") {
+                currentPhase = .embeddingArtwork
+                return emitCurrentIfNeeded()
+            }
+
+            if let downloadProgress = downloadProgress(for: line) {
+                latestDownloadProgress = max(latestDownloadProgress, downloadProgress)
+                return emitCurrentIfNeeded()
+            }
+
+            return nil
         }
 
         private func downloadProgress(for line: String) -> Double? {
@@ -85,10 +136,93 @@ actor Downloader {
                 with: conversionPattern
             )
         }
+
+        private mutating func updatePreparingPhase(for line: String) -> Bool {
+            if line.hasPrefix("[youtube] Extracting URL:") {
+                currentPhase = .preparing
+                latestPreparingProgress = max(latestPreparingProgress, 0.02)
+                return true
+            }
+            if line.contains("Downloading webpage") || line.contains("Downloading android") || line.contains("Downloading player") {
+                currentPhase = .preparing
+                latestPreparingProgress = max(latestPreparingProgress, 0.05)
+                return true
+            }
+            if line.hasPrefix("[MetadataParser]") || line.contains("format(s):") {
+                currentPhase = .preparing
+                latestPreparingProgress = max(latestPreparingProgress, 0.08)
+                return true
+            }
+            return false
+        }
+
+        private mutating func updateArtworkPhase(for line: String) -> Bool {
+            if line.contains("Downloading video thumbnail") {
+                currentPhase = .fetchingArtwork
+                latestArtworkProgress = max(latestArtworkProgress, 0.12)
+                return true
+            }
+            if line.contains("Writing video thumbnail") {
+                currentPhase = .fetchingArtwork
+                latestArtworkProgress = max(latestArtworkProgress, 0.15)
+                return true
+            }
+            if line.hasPrefix("[ThumbnailsConvertor]") {
+                currentPhase = .fetchingArtwork
+                latestArtworkProgress = max(latestArtworkProgress, 0.18)
+                return true
+            }
+            return false
+        }
+
+        private mutating func emitCurrentIfNeeded(at date: Date = .now) -> ProgressUpdate? {
+            let update = currentUpdate(at: date)
+            if let lastEmittedUpdate,
+               update.phase == lastEmittedUpdate.phase,
+               update.progress <= (lastEmittedUpdate.progress + 0.003) {
+                return nil
+            }
+            lastEmittedUpdate = update
+            return update
+        }
+
+        private func currentUpdate(at date: Date) -> ProgressUpdate {
+            let progress: Double
+            switch currentPhase {
+            case .preparing:
+                progress = latestPreparingProgress
+            case .fetchingArtwork:
+                progress = max(0.1, latestArtworkProgress)
+            case .downloadingAudio:
+                progress = max(0.18, Downloader.mapPhaseProgress(latestDownloadProgress, into: 0.18 ... 0.58))
+            case .convertingAudio:
+                let conversionFraction = if hasSeenConversionProgress {
+                    latestConversionProgress
+                } else {
+                    Downloader.estimatedConversionFraction(
+                        elapsed: date.timeIntervalSince(conversionStartedAt ?? date),
+                        durationSeconds: durationSeconds
+                    )
+                }
+                progress = max(
+                    Downloader.mapPhaseProgress(latestDownloadProgress, into: 0.18 ... 0.58),
+                    Downloader.mapPhaseProgress(conversionFraction, into: 0.58 ... 0.9)
+                )
+            case .embeddingMetadata:
+                progress = 0.94
+            case .embeddingArtwork:
+                progress = 0.98
+            }
+
+            let boundedProgress = min(max(progress, 0), 0.99)
+            return ProgressUpdate(progress: boundedProgress, phase: currentPhase)
+        }
     }
 
     private var runningDownloadProcesses: [String: Process] = [:]
     private var cancelledDownloadIDs: Set<String> = []
+    private var runningFetchProcess: Process?
+    private var fetchCancellationRequested = false
 
     // MARK: - Dependency resolution
 
@@ -195,7 +329,7 @@ actor Downloader {
 
     func listVideos(channelURL: String, max: Int = 50) async throws -> [VideoInfo] {
         guard let ytdlp = ytDlpPath() else { throw DownloaderError.dependencyMissing("yt-dlp") }
-        let processOutput = try await runProcessCapturingOutput(
+        let processOutput = try await runListingProcessCapturingOutput(
             ytdlp,
             arguments: [
                 "--ignore-errors",
@@ -229,7 +363,7 @@ actor Downloader {
     func downloadAudio(
         episode: Episode,
         to episodesDir: URL,
-        progress: (@Sendable (Double) -> Void)? = nil
+        progress: (@Sendable (ProgressUpdate) -> Void)? = nil
     ) async throws -> String {
         guard let ytdlp = ytDlpPath() else { throw DownloaderError.dependencyMissing("yt-dlp") }
 
@@ -244,6 +378,12 @@ actor Downloader {
             "--audio-format", "mp3",
             "--audio-quality", "3",
             "--embed-metadata",
+            "--write-thumbnail",
+            "--convert-thumbnails", "jpg",
+            "--embed-thumbnail",
+            "--parse-metadata", "%(channel|)s:%(meta_artist)s",
+            "--parse-metadata", "%(channel|)s:%(meta_album_artist)s",
+            "--parse-metadata", "%(channel|)s:%(meta_album)s",
             "--output", episodesDir.appendingPathComponent(templateName).path,
             "--no-playlist", "--no-warnings", "--newline",
         ]
@@ -308,13 +448,6 @@ actor Downloader {
         }
     }
 
-    static func displayProgress(downloadProgress: Double, conversionProgress: Double?) -> Double {
-        if let conversionProgress {
-            return downloadPhaseWeight + (min(max(conversionProgress, 0), 1) * (1 - downloadPhaseWeight))
-        }
-        return min(max(downloadProgress, 0), 1) * downloadPhaseWeight
-    }
-
     static func parseDownloadProgress(from line: String) -> Double? {
         parseDownloadProgress(from: line, with: try? NSRegularExpression(pattern: #"(\d+\.?\d*)%"#))
     }
@@ -325,6 +458,19 @@ actor Downloader {
             durationSeconds: durationSeconds,
             with: try? NSRegularExpression(pattern: #"time=(\d+):(\d+):(\d+(?:\.\d+)?)"#)
         )
+    }
+
+    static func mapPhaseProgress(_ progress: Double, into range: ClosedRange<Double>) -> Double {
+        let boundedProgress = min(max(progress, 0), 1)
+        let span = range.upperBound - range.lowerBound
+        return range.lowerBound + (boundedProgress * span)
+    }
+
+    static func estimatedConversionFraction(elapsed: TimeInterval, durationSeconds: Int) -> Double {
+        let boundedElapsed = max(0, elapsed)
+        let baselineDuration = max(Double(durationSeconds), 60)
+        let estimate = min(max(baselineDuration * 0.08, 6), 45)
+        return min(1 - exp(-boundedElapsed / estimate), 0.95)
     }
 
     private static func parseDownloadProgress(from line: String, with pattern: NSRegularExpression?) -> Double? {
@@ -463,12 +609,57 @@ actor Downloader {
         }
     }
 
+    private func runListingProcessCapturingOutput(_ path: String, arguments: [String]) async throws -> ProcessOutput {
+        fetchCancellationRequested = false
+
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: path)
+        process.arguments = arguments
+
+        let stdout = Pipe()
+        let stderr = Pipe()
+        process.standardOutput = stdout
+        process.standardError = stderr
+        runningFetchProcess = process
+
+        return try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global(qos: .userInitiated).async {
+                do {
+                    try process.run()
+                    process.waitUntilExit()
+                    let outData = stdout.fileHandleForReading.readDataToEndOfFile()
+                    let errData = stderr.fileHandleForReading.readDataToEndOfFile()
+                    let output = String(data: outData, encoding: .utf8) ?? ""
+                    let errorOutput = String(data: errData, encoding: .utf8) ?? ""
+
+                    Task {
+                        let wasCancelled = await self.completeFetchProcess()
+                        if wasCancelled {
+                            continuation.resume(throwing: DownloaderError.cancelled)
+                        } else {
+                            continuation.resume(returning: ProcessOutput(
+                                stdout: output,
+                                stderr: errorOutput,
+                                terminationStatus: process.terminationStatus
+                            ))
+                        }
+                    }
+                } catch {
+                    Task {
+                        _ = await self.completeFetchProcess()
+                        continuation.resume(throwing: error)
+                    }
+                }
+            }
+        }
+    }
+
     private func runProcessWithProgress(
         _ path: String,
         arguments: [String],
         downloadID: String,
         durationSeconds: Int,
-        onProgress: @Sendable @escaping (Double) -> Void
+        onProgress: @Sendable @escaping (ProgressUpdate) -> Void
     ) async throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: path)
@@ -487,8 +678,8 @@ actor Downloader {
                 let outputQueue = DispatchQueue(label: "recast.downloader.progress")
                 var stderrText = ""
                 var stdoutText = ""
-                var stdoutParser = ProgressParser(durationSeconds: durationSeconds)
-                var stderrParser = ProgressParser(durationSeconds: durationSeconds)
+                var progressParser = ProgressParser(durationSeconds: durationSeconds)
+                var progressTimer: DispatchSourceTimer?
 
                 let handleOutput: (FileHandle, Bool) -> Void = { handle, isStandardError in
                     let data = handle.availableData
@@ -497,14 +688,12 @@ actor Downloader {
                     outputQueue.sync {
                         if isStandardError {
                             stderrText += text
-                            for value in stderrParser.ingest(text) {
-                                onProgress(value)
-                            }
                         } else {
                             stdoutText += text
-                            for value in stdoutParser.ingest(text) {
-                                onProgress(value)
-                            }
+                        }
+
+                        for value in progressParser.ingest(text) {
+                            onProgress(value)
                         }
                     }
                 }
@@ -519,12 +708,22 @@ actor Downloader {
 
                 do {
                     try process.run()
+                    let timer = DispatchSource.makeTimerSource(queue: outputQueue)
+                    timer.schedule(deadline: .now() + .milliseconds(250), repeating: .milliseconds(250))
+                    timer.setEventHandler {
+                        if let update = progressParser.heartbeat() {
+                            onProgress(update)
+                        }
+                    }
+                    timer.resume()
+                    progressTimer = timer
                     process.waitUntilExit()
                     stdout.fileHandleForReading.readabilityHandler = nil
                     stderr.fileHandleForReading.readabilityHandler = nil
+                    progressTimer?.cancel()
 
                     let finalOutput = outputQueue.sync { () -> (String, String) in
-                        for value in stdoutParser.finish() + stderrParser.finish() {
+                        for value in progressParser.finish() {
                             onProgress(value)
                         }
                         return (stdoutText, stderrText)
@@ -533,7 +732,7 @@ actor Downloader {
                     Task {
                         let wasCancelled = await self.completeDownload(downloadID: downloadID)
                         if process.terminationStatus == 0 {
-                            onProgress(1.0)
+                            onProgress(ProgressUpdate(progress: 1.0, phase: .embeddingArtwork))
                             continuation.resume(returning: ())
                         } else if wasCancelled {
                             continuation.resume(throwing: DownloaderError.cancelled)
@@ -547,6 +746,7 @@ actor Downloader {
                 } catch {
                     stdout.fileHandleForReading.readabilityHandler = nil
                     stderr.fileHandleForReading.readabilityHandler = nil
+                    progressTimer?.cancel()
                     Task {
                         _ = await self.completeDownload(downloadID: downloadID)
                         continuation.resume(throwing: error)
@@ -566,6 +766,11 @@ actor Downloader {
             cancelledDownloadIDs.insert(videoID)
             runningDownloadProcesses[videoID]?.terminate()
         }
+    }
+
+    func cancelFetch() {
+        fetchCancellationRequested = true
+        runningFetchProcess?.terminate()
     }
 
     func cancelAllDownloadsAndWait(
@@ -588,6 +793,13 @@ actor Downloader {
     private func completeDownload(downloadID: String) -> Bool {
         runningDownloadProcesses.removeValue(forKey: downloadID)
         return cancelledDownloadIDs.remove(downloadID) != nil
+    }
+
+    private func completeFetchProcess() -> Bool {
+        runningFetchProcess = nil
+        let wasCancelled = fetchCancellationRequested
+        fetchCancellationRequested = false
+        return wasCancelled
     }
 
     private func waitForDownloadsToFinish(timeoutNanoseconds: UInt64) async {

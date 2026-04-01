@@ -58,6 +58,10 @@ enum Paths {
         return dir
     }
 
+    static func artworkURL(forEpisodeFileName fileName: String, in outputDir: URL) -> URL {
+        episodesDir(in: outputDir).appendingPathComponent(Episode.artworkFileName(forEpisodeFileName: fileName))
+    }
+
     static var ytDlpInBin: URL {
         binDir.appendingPathComponent("yt-dlp")
     }

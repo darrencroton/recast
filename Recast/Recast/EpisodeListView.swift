@@ -42,9 +42,12 @@ struct EpisodeListView: View {
                 List(episodes, selection: $selectedEpisodeIDs) { episode in
                     EpisodeRow(
                         episode: episode,
-                        isDownloading: store.activeDownloads.contains(episode.videoID),
-                        progress: store.downloadProgress[episode.videoID],
-                        showChannelName: showChannelName
+                        downloadStatus: store.downloadStatus(for: episode),
+                        showChannelName: showChannelName,
+                        onStartDownload: {
+                            selectedEpisodeIDs = [episode.id]
+                            onActivateSelection()
+                        }
                     )
                     .tag(episode.id)
                     .contextMenu { episodeContextMenu(for: episode) }
@@ -75,6 +78,8 @@ struct EpisodeListView: View {
 
         if canDownload(targetEpisodes) {
             Button {
+                selectedEpisodeIDs = targetIDs
+                onActivateSelection()
                 Task { await store.downloadEpisodes(targetIDs) }
             } label: {
                 Label(
@@ -147,14 +152,20 @@ struct EpisodeListView: View {
 
 struct EpisodeRow: View {
     let episode: Episode
-    let isDownloading: Bool
-    let progress: Double?
+    let downloadStatus: DownloadStatus?
     let showChannelName: Bool
+    let onStartDownload: () -> Void
     @Environment(AppStore.self) private var store
     @State private var isHoveringActionControl = false
 
+    private var channelName: String {
+        store.channels.first(where: { $0.id == episode.channelID })?.name ?? "Unknown Channel"
+    }
+
     var body: some View {
         HStack(spacing: 12) {
+            EpisodeArtworkView(artworkURL: store.artworkURL(for: episode))
+
             VStack(alignment: .leading, spacing: 3) {
                 Text(episode.title)
                     .font(.body)
@@ -162,8 +173,7 @@ struct EpisodeRow: View {
                     .foregroundStyle(episode.isPlayed ? .secondary : .primary)
 
                 HStack(spacing: 8) {
-                    if showChannelName,
-                       let channelName = store.channels.first(where: { $0.id == episode.channelID })?.name {
+                    if showChannelName {
                         Text(channelName)
                         Text("·")
                     }
@@ -173,6 +183,12 @@ struct EpisodeRow: View {
                 }
                 .font(.caption)
                 .foregroundStyle(.secondary)
+
+                if let downloadStatus {
+                    Text(downloadStatus.phase.label)
+                        .font(.caption2)
+                        .foregroundStyle(.tint)
+                }
             }
 
             Spacer()
@@ -180,7 +196,7 @@ struct EpisodeRow: View {
             actionAccessory
                 .frame(width: 24, height: 24)
                 .onHover { isHovering in
-                    isHoveringActionControl = isDownloading && isHovering
+                    isHoveringActionControl = downloadStatus != nil && isHovering
                 }
         }
         .padding(.vertical, 6)
@@ -188,7 +204,7 @@ struct EpisodeRow: View {
 
     @ViewBuilder
     private var actionAccessory: some View {
-        if isDownloading {
+        if let downloadStatus {
             if isHoveringActionControl {
                 Button(role: .destructive) {
                     store.stopDownload(videoID: episode.videoID)
@@ -199,12 +215,9 @@ struct EpisodeRow: View {
                 }
                 .buttonStyle(.plain)
                 .help("Stop download")
-            } else if let progress {
-                CircularProgressView(progress: progress)
-                    .frame(width: 22, height: 22)
             } else {
-                ProgressView()
-                    .controlSize(.small)
+                CircularProgressView(progress: downloadStatus.progress)
+                    .frame(width: 22, height: 22)
             }
         } else if episode.isDownloaded {
             Image(systemName: episode.isPlayed ? "checkmark.circle" : "checkmark.circle.fill")
@@ -212,6 +225,7 @@ struct EpisodeRow: View {
                 .foregroundStyle(episode.isPlayed ? Color.secondary : .green)
         } else {
             Button {
+                onStartDownload()
                 Task { await store.downloadEpisode(episode) }
             } label: {
                 Image(systemName: "arrow.down.circle")

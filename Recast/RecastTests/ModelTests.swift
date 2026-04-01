@@ -77,6 +77,19 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(episode.suggestedFileName, "1970-01-01 - A B C D [safe42].mp3")
     }
 
+    func testArtworkFileName_matchesMP3Stem() {
+        var episode = Episode(
+            channelID: UUID(),
+            videoID: "cover1",
+            title: "Covered Episode",
+            publishDate: Date(timeIntervalSince1970: 0),
+            durationSeconds: 60
+        )
+        episode.fileName = "1970-01-01 - Covered Episode [cover1].mp3"
+
+        XCTAssertEqual(episode.artworkFileName, "1970-01-01 - Covered Episode [cover1].jpg")
+    }
+
     // MARK: - Episode Codable (backwards compatibility)
 
     func testEpisodeDecodesWithoutIsPlayed() throws {
@@ -234,8 +247,18 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(progress!, 0.5, accuracy: 0.0001)
     }
 
-    func testDisplayProgress_prioritisesConversionPhase() {
-        let progress = Downloader.displayProgress(downloadProgress: 0.8, conversionProgress: 0.5)
-        XCTAssertEqual(progress, 0.575, accuracy: 0.0001)
+    func testMapPhaseProgress_scalesIntoSuppliedRange() {
+        let progress = Downloader.mapPhaseProgress(0.5, into: 0.18 ... 0.58)
+        XCTAssertEqual(progress, 0.38, accuracy: 0.0001)
+    }
+
+    func testEstimatedConversionFraction_growsOverTimeAndStaysBounded() {
+        let progress = Downloader.estimatedConversionFraction(elapsed: 12, durationSeconds: 600)
+        XCTAssertGreaterThan(progress, 0.0)
+        XCTAssertLessThan(progress, 0.95)
+    }
+
+    func testDownloadPhaseLabel_convertingAudio() {
+        XCTAssertEqual(DownloadPhase.convertingAudio.label, "Converting to MP3")
     }
 }

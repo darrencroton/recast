@@ -19,6 +19,11 @@ private enum SelectionActionContext {
     case episodes(Set<UUID>)
 }
 
+enum ChannelRefreshState {
+    case current
+    case queued
+}
+
 struct ContentView: View {
     @Environment(AppStore.self) private var store
     @State private var selection: Set<SidebarItem> = []
@@ -27,6 +32,7 @@ struct ContentView: View {
     @State private var searchQuery = ""
     @State private var episodeFilter: EpisodeFilter = .all
     @State private var focusedPane: FocusedPane?
+    @State private var isHoveringRefreshControl = false
 
     private var selectedChannelIDs: Set<UUID> {
         var ids = Set<UUID>()
@@ -102,13 +108,13 @@ struct ContentView: View {
     }
 
     private var canRefreshSelectedChannels: Bool {
+        if store.isFetching { return true }
         guard case .channels(let ids) = selectionContext else { return false }
-        return !ids.isEmpty && !store.isFetching
+        return !ids.isEmpty
     }
 
     private var isRefreshingSelectedChannels: Bool {
-        guard case .channels(let ids) = selectionContext else { return false }
-        return !ids.isEmpty && store.isFetching
+        store.isFetching
     }
 
     private var canDeleteSelectedItems: Bool {
@@ -205,7 +211,11 @@ struct ContentView: View {
 
                 Section("Channels") {
                     ForEach(store.channels) { channel in
-                        ChannelRow(channel: channel, episodeCount: store.episodes(for: channel.id).count)
+                        ChannelRow(
+                            channel: channel,
+                            episodeCount: store.episodes(for: channel.id).count,
+                            refreshState: refreshState(for: channel.id)
+                        )
                             .tag(SidebarItem.channel(channel.id))
                             .contextMenu {
                                 channelContextMenu(for: channel.id)
@@ -231,28 +241,34 @@ struct ContentView: View {
     // MARK: - Detail
 
     private var detail: some View {
-        Group {
-            if store.channels.isEmpty {
-                ContentUnavailableView {
-                    Label("Get Started", systemImage: "plus.circle")
-                } description: {
-                    Text("Add a YouTube channel to begin downloading episodes.")
-                }
-            } else if showingAllEpisodes || !selectedChannelIDs.isEmpty {
-                EpisodeListView(
-                    channelIDs: showingAllEpisodes ? Set() : selectedChannelIDs,
-                    searchQuery: searchQuery,
-                    filterMode: $episodeFilter,
-                    selectedEpisodeIDs: $selectedEpisodeIDs,
-                    onActivateSelection: {
-                        focusedPane = .episodes
+        VStack(spacing: 0) {
+            if store.isFetching || store.hasActiveDownloads {
+                operationSummaryBar
+            }
+
+            Group {
+                if store.channels.isEmpty {
+                    ContentUnavailableView {
+                        Label("Get Started", systemImage: "plus.circle")
+                    } description: {
+                        Text("Add a YouTube channel to begin downloading episodes.")
                     }
-                )
-            } else {
-                ContentUnavailableView {
-                    Label("Select a Channel", systemImage: "sidebar.left")
-                } description: {
-                    Text("Choose a channel from the sidebar, or select All Episodes.")
+                } else if showingAllEpisodes || !selectedChannelIDs.isEmpty {
+                    EpisodeListView(
+                        channelIDs: showingAllEpisodes ? Set() : selectedChannelIDs,
+                        searchQuery: searchQuery,
+                        filterMode: $episodeFilter,
+                        selectedEpisodeIDs: $selectedEpisodeIDs,
+                        onActivateSelection: {
+                            focusedPane = .episodes
+                        }
+                    )
+                } else {
+                    ContentUnavailableView {
+                        Label("Select a Channel", systemImage: "sidebar.left")
+                    } description: {
+                        Text("Choose a channel from the sidebar, or select All Episodes.")
+                    }
                 }
             }
         }
@@ -287,17 +303,29 @@ struct ContentView: View {
 
     private var refreshSelectionButton: some View {
         Button {
-            refreshChannelsFromToolbar()
+            if store.isFetching {
+                store.stopFetch()
+            } else {
+                refreshChannelsFromToolbar()
+            }
         } label: {
             if isRefreshingSelectedChannels {
-                ProgressView()
-                    .controlSize(.small)
+                if isHoveringRefreshControl {
+                    Image(systemName: "stop.circle.fill")
+                        .foregroundStyle(.red)
+                } else {
+                    ProgressView()
+                        .controlSize(.small)
+                }
             } else {
                 Label("Refresh", systemImage: "arrow.clockwise")
             }
         }
         .disabled(!canRefreshSelectedChannels)
-        .help("Refresh the selected channels")
+        .onHover { isHovering in
+            isHoveringRefreshControl = store.isFetching && isHovering
+        }
+        .help(store.isFetching ? "Stop current refresh" : "Refresh the selected channels")
     }
 
     private var downloadSelectionButton: some View {
@@ -397,9 +425,34 @@ struct ContentView: View {
 
     private func refreshChannels(_ ids: Set<UUID>) {
         guard !ids.isEmpty else { return }
+        selection = Set(ids.map { SidebarItem.channel($0) })
+        selectedEpisodeIDs.removeAll()
+        focusedPane = .sidebar
         Task {
             await store.fetchNewEpisodes(for: ids)
         }
+    }
+
+    private func refreshState(for channelID: UUID) -> ChannelRefreshState? {
+        guard store.activeRefreshChannelIDs.contains(channelID) else { return nil }
+        return store.currentRefreshChannelID == channelID ? .current : .queued
+    }
+
+    private func showRefreshingChannels() {
+        guard !store.activeRefreshChannelIDs.isEmpty else { return }
+        selection = Set(store.activeRefreshChannelIDs.map { SidebarItem.channel($0) })
+        selectedEpisodeIDs.removeAll()
+        focusedPane = .sidebar
+    }
+
+    private func showActiveDownloads() {
+        let activeEpisodeIDs = Set(store.activeDownloadEpisodes.map(\.id))
+        guard !activeEpisodeIDs.isEmpty else { return }
+        searchQuery = ""
+        episodeFilter = .all
+        selection = [.allEpisodes]
+        selectedEpisodeIDs = activeEpisodeIDs
+        focusedPane = .episodes
     }
 
     private func deleteChannels(_ ids: Set<UUID>) {
@@ -429,15 +482,22 @@ struct ContentView: View {
     private func channelContextMenu(for channelID: UUID) -> some View {
         let targetIDs = channelContextTarget(for: channelID)
 
-        Button {
-            refreshChannels(targetIDs)
-        } label: {
-            Label(
-                targetIDs.count == 1 ? "Refresh Channel" : "Refresh Selected Channels",
-                systemImage: "arrow.clockwise"
-            )
+        if store.isFetching {
+            Button(role: .destructive) {
+                store.stopFetch()
+            } label: {
+                Label("Stop Refresh", systemImage: "stop.circle")
+            }
+        } else {
+            Button {
+                refreshChannels(targetIDs)
+            } label: {
+                Label(
+                    targetIDs.count == 1 ? "Refresh Channel" : "Refresh Selected Channels",
+                    systemImage: "arrow.clockwise"
+                )
+            }
         }
-        .disabled(store.isFetching)
 
         Button(role: .destructive) {
             deleteChannels(targetIDs)
@@ -476,17 +536,89 @@ struct ContentView: View {
         .padding(.vertical, 8)
         .background(.bar)
     }
+
+    private var operationSummaryBar: some View {
+        VStack(spacing: 0) {
+            if store.isFetching {
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .controlSize(.small)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Refreshing \(store.activeRefreshChannelIDs.count) channel\(store.activeRefreshChannelIDs.count == 1 ? "" : "s")")
+                            .font(.subheadline)
+                        if let currentRefreshChannelName = store.currentRefreshChannelName {
+                            Text("Currently checking \(currentRefreshChannelName)")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Button("Show") {
+                        showRefreshingChannels()
+                    }
+                    Button("Stop", role: .destructive) {
+                        store.stopFetch()
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+            }
+
+            if store.hasActiveDownloads {
+                HStack(spacing: 10) {
+                    Image(systemName: "arrow.down.circle.fill")
+                        .foregroundStyle(.tint)
+                    VStack(alignment: .leading, spacing: 2) {
+                        if store.activeDownloadEpisodes.count == 1,
+                           let episode = store.activeDownloadEpisodes.first,
+                           let downloadStatus = store.downloadStatus(for: episode) {
+                            Text(downloadStatus.phase.label)
+                                .font(.subheadline)
+                            Text(episode.title)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                        } else {
+                            Text("Downloading \(store.activeDownloadEpisodes.count) episode\(store.activeDownloadEpisodes.count == 1 ? "" : "s")")
+                                .font(.subheadline)
+                            Text("Progress stays visible even if you browse elsewhere.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                    Spacer()
+                    Button("Show") {
+                        showActiveDownloads()
+                    }
+                    Button("Stop All", role: .destructive) {
+                        store.stopAllDownloads()
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 10)
+            }
+        }
+        .background(.regularMaterial)
+        .overlay(alignment: .bottom) {
+            Divider()
+        }
+    }
 }
 
 // MARK: - Channel Row
 
 struct ChannelRow: View {
+    @Environment(AppStore.self) private var store
     let channel: Channel
     let episodeCount: Int
+    let refreshState: ChannelRefreshState?
 
     var body: some View {
         HStack(spacing: 10) {
-            ChannelMonogram(name: channel.name)
+            ChannelArtworkView(
+                artworkURL: store.channelArtworkURL(for: channel.id),
+                channelName: channel.name
+            )
             VStack(alignment: .leading, spacing: 2) {
                 Text(channel.name)
                     .font(.body)
@@ -496,8 +628,24 @@ struct ChannelRow: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Spacer()
+            refreshAccessory
         }
         .padding(.vertical, 2)
+    }
+
+    @ViewBuilder
+    private var refreshAccessory: some View {
+        switch refreshState {
+        case .current:
+            ProgressView()
+                .controlSize(.small)
+        case .queued:
+            Image(systemName: "arrow.clockwise.circle")
+                .foregroundStyle(.secondary)
+        case nil:
+            EmptyView()
+        }
     }
 }
 

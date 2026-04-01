@@ -322,6 +322,18 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: mp3Path.path))
     }
 
+    func test_deleteEpisodes_removesArtworkSidecar() throws {
+        let chID = UUID()
+        let ep = makeEpisode(channelID: chID, videoID: "v1", fileName: "v1.mp3")
+        store.episodes = [ep]
+        let artworkPath = Paths.artworkURL(forEpisodeFileName: "v1.mp3", in: tempDir)
+        try Data("fake".utf8).write(to: artworkPath)
+
+        store.deleteEpisodes([ep.id])
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: artworkPath.path))
+    }
+
     // MARK: - removeChannels
 
     func test_removeChannels_removesEpisodes() {
@@ -331,6 +343,20 @@ final class StoreTests: XCTestCase {
         store.removeChannels([ch.id])
         XCTAssertTrue(store.channels.isEmpty)
         XCTAssertTrue(store.episodes.isEmpty)
+    }
+
+    func test_channelArtworkURL_prefersNewestDownloadedEpisodeArtwork() throws {
+        let channel = makeChannel()
+        let older = makeEpisode(channelID: channel.id, videoID: "older", daysAgo: 5, fileName: "older.mp3")
+        let newer = makeEpisode(channelID: channel.id, videoID: "newer", daysAgo: 1, fileName: "newer.mp3")
+        store.channels = [channel]
+        store.episodes = [older, newer]
+        let olderArtwork = Paths.artworkURL(forEpisodeFileName: "older.mp3", in: tempDir)
+        let newerArtwork = Paths.artworkURL(forEpisodeFileName: "newer.mp3", in: tempDir)
+        try Data("old".utf8).write(to: olderArtwork)
+        try Data("new".utf8).write(to: newerArtwork)
+
+        XCTAssertEqual(store.channelArtworkURL(for: channel.id)?.lastPathComponent, "newer.jpg")
     }
 
     // MARK: - feedURL
@@ -464,7 +490,9 @@ final class StoreTests: XCTestCase {
         store.serverPort = 9999
         store.autoFetchInterval = 24
         store.autoStartServer = true
-        store.downloadProgress = ["reset-me": 0.5]
+        store.activeDownloadStatus = [
+            "reset-me": DownloadStatus(progress: 0.5, phase: .convertingAudio)
+        ]
 
         let episodesDir = Paths.ensureManagedEpisodesDirectory(in: customOutputDir)
         let audioFile = episodesDir.appendingPathComponent("reset-me.mp3")
@@ -496,7 +524,7 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(store.autoStartServer)
         XCTAssertFalse(store.isServerRunning)
         XCTAssertFalse(store.hasActiveDownloads)
-        XCTAssertTrue(store.downloadProgress.isEmpty)
+        XCTAssertTrue(store.activeDownloadStatus.isEmpty)
         XCTAssertEqual(store.statusMessage, "Ready")
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: audioFile.path))

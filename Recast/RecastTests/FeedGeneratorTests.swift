@@ -219,6 +219,26 @@ final class FeedGeneratorTests: XCTestCase {
         XCTAssertTrue(try feedContent().contains("https://www.youtube.com/watch?v=abc456"))
     }
 
+    func test_write_includesItemArtworkWhenSidecarExists() throws {
+        let channel = makeChannel()
+        let ep = makeEpisode(channelID: channel.id, videoID: "art001", fileName: "art001.mp3")
+        let artworkURL = Paths.artworkURL(forEpisodeFileName: "art001.mp3", in: tempDir)
+        try Data("jpg".utf8).write(to: artworkURL)
+
+        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
+
+        XCTAssertTrue(try feedContent().contains("<itunes:image href=\"http://localhost:8888/episodes/art001.jpg\"/>"))
+    }
+
+    func test_write_omitsItemArtworkWhenSidecarMissing() throws {
+        let channel = makeChannel()
+        let ep = makeEpisode(channelID: channel.id, videoID: "noart001", fileName: "noart001.mp3")
+
+        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
+
+        XCTAssertFalse(try feedContent().contains("<itunes:image"))
+    }
+
     // MARK: - write(): XML escaping
 
     func test_write_escapesAmpersandInTitle() throws {
