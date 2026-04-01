@@ -2,6 +2,8 @@ import SwiftUI
 
 struct SettingsView: View {
     @Environment(AppStore.self) private var store
+    @State private var isResetConfirmationPresented = false
+    @State private var isResetting = false
 
     var body: some View {
         @Bindable var store = store
@@ -69,9 +71,32 @@ struct SettingsView: View {
                     .foregroundStyle(store.ffmpegReady ? .green : .red)
                 }
             }
+
+            Section("Reset") {
+                Text("Remove all channels, episode history, downloaded audio, generated feeds, app data, and settings.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                Button("Reset App to Defaults…", role: .destructive) {
+                    isResetConfirmationPresented = true
+                }
+                .disabled(isResetting)
+            }
         }
         .formStyle(.grouped)
-        .frame(width: 500, height: 340)
+        .frame(width: 500, height: 420)
+        .alert("Reset Recast to Defaults?", isPresented: $isResetConfirmationPresented) {
+            Button("Cancel", role: .cancel) {}
+            Button("Reset", role: .destructive) {
+                Task {
+                    isResetting = true
+                    await store.resetToDefaults()
+                    isResetting = false
+                }
+            }
+        } message: {
+            Text("This will remove all saved channels, episode state, downloaded files, generated feeds, cached app data, and custom settings.")
+        }
     }
 
     private func chooseOutputDir() {

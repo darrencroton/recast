@@ -5,7 +5,9 @@ final class StoreTests: XCTestCase {
 
     private var store: AppStore!
     private var tempDir: URL!
+    private var tempAppSupportDir: URL!
     private var tempStateFile: URL!
+    private var defaultOutputDir: URL!
 
     // MARK: - Setup / teardown
 
@@ -14,9 +16,14 @@ final class StoreTests: XCTestCase {
         tempDir = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
         try! FileManager.default.createDirectory(at: tempDir, withIntermediateDirectories: true)
-        tempStateFile = tempDir.appendingPathComponent("state.json")
+        tempAppSupportDir = tempDir.appendingPathComponent("app-support", isDirectory: true)
+        try! FileManager.default.createDirectory(at: tempAppSupportDir, withIntermediateDirectories: true)
+        tempStateFile = tempAppSupportDir.appendingPathComponent("state.json")
+        defaultOutputDir = tempDir.appendingPathComponent("default-output", isDirectory: true)
         store = AppStore(
             stateFileURL: tempStateFile,
+            appSupportURL: tempAppSupportDir,
+            defaultOutputDirectory: defaultOutputDir,
             shouldLoadPersistentState: false,
             autoCheckDependencies: false
         )
@@ -386,6 +393,8 @@ final class StoreTests: XCTestCase {
 
         let loadedStore = AppStore(
             stateFileURL: tempStateFile,
+            appSupportURL: tempAppSupportDir,
+            defaultOutputDirectory: defaultOutputDir,
             shouldLoadPersistentState: true,
             autoCheckDependencies: false
         )
@@ -413,11 +422,13 @@ final class StoreTests: XCTestCase {
 
         let loadedStore = AppStore(
             stateFileURL: tempStateFile,
+            appSupportURL: tempAppSupportDir,
+            defaultOutputDirectory: defaultOutputDir,
             shouldLoadPersistentState: true,
             autoCheckDependencies: false
         )
 
-        XCTAssertEqual(loadedStore.outputDirectory.standardizedFileURL, Paths.defaultOutputDir.standardizedFileURL)
+        XCTAssertEqual(loadedStore.outputDirectory.standardizedFileURL, defaultOutputDir.standardizedFileURL)
     }
 
     func test_cleanupPartialArtifacts_removesOnlyMatchingFiles() async throws {
@@ -439,5 +450,69 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: matchingWebm.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: matchingMP3.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: otherFile.path))
+    }
+
+    func test_resetToDefaults_clearsStateAndManagedArtifacts() async throws {
+        let customOutputDir = tempDir.appendingPathComponent("custom-output", isDirectory: true)
+        try FileManager.default.createDirectory(at: customOutputDir, withIntermediateDirectories: true)
+
+        let channel = makeChannel()
+        let downloadedEpisode = makeEpisode(channelID: channel.id, videoID: "reset-me", fileName: "reset-me.mp3")
+        store.channels = [channel]
+        store.episodes = [downloadedEpisode]
+        store.outputDirectory = customOutputDir
+        store.serverPort = 9999
+        store.autoFetchInterval = 24
+        store.autoStartServer = true
+        store.downloadProgress = ["reset-me": 0.5]
+
+        let episodesDir = Paths.episodesDir(in: customOutputDir)
+        let audioFile = episodesDir.appendingPathComponent("reset-me.mp3")
+        try Data("audio".utf8).write(to: audioFile)
+        try Data("feed".utf8).write(to: customOutputDir.appendingPathComponent("feed.xml"))
+
+        let binDir = tempAppSupportDir.appendingPathComponent("bin", isDirectory: true)
+        let logsDir = tempAppSupportDir.appendingPathComponent("logs", isDirectory: true)
+        try FileManager.default.createDirectory(at: binDir, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: logsDir, withIntermediateDirectories: true)
+        try Data("bin".utf8).write(to: binDir.appendingPathComponent("yt-dlp"))
+        try Data("log".utf8).write(to: logsDir.appendingPathComponent("recast.log"))
+
+        store.save()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: tempStateFile.path))
+
+        await store.resetToDefaults()
+
+        XCTAssertTrue(store.channels.isEmpty)
+        XCTAssertTrue(store.episodes.isEmpty)
+        XCTAssertEqual(store.outputDirectory.standardizedFileURL, defaultOutputDir.standardizedFileURL)
+        XCTAssertEqual(store.serverPort, 8888)
+        XCTAssertEqual(store.autoFetchInterval, 0)
+        XCTAssertFalse(store.autoStartServer)
+        XCTAssertFalse(store.isServerRunning)
+        XCTAssertFalse(store.hasActiveDownloads)
+        XCTAssertTrue(store.downloadProgress.isEmpty)
+        XCTAssertEqual(store.statusMessage, "Ready")
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: audioFile.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: customOutputDir.appendingPathComponent("feed.xml").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: binDir.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: logsDir.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: tempStateFile.path))
+
+        let reloadedStore = AppStore(
+            stateFileURL: tempStateFile,
+            appSupportURL: tempAppSupportDir,
+            defaultOutputDirectory: defaultOutputDir,
+            shouldLoadPersistentState: true,
+            autoCheckDependencies: false
+        )
+
+        XCTAssertTrue(reloadedStore.channels.isEmpty)
+        XCTAssertTrue(reloadedStore.episodes.isEmpty)
+        XCTAssertEqual(reloadedStore.outputDirectory.standardizedFileURL, defaultOutputDir.standardizedFileURL)
+        XCTAssertEqual(reloadedStore.serverPort, 8888)
+        XCTAssertEqual(reloadedStore.autoFetchInterval, 0)
+        XCTAssertFalse(reloadedStore.autoStartServer)
     }
 }

@@ -2,12 +2,15 @@ import SwiftUI
 
 @Observable
 final class AppStore {
+    private static let defaultServerPort = 8888
+    private static let defaultAutoFetchInterval = 0
+    private static let defaultAutoStartServer = false
 
     // MARK: - State
 
     var channels: [Channel] = []
     var episodes: [Episode] = []
-    var outputDirectory: URL = Paths.defaultOutputDir
+    var outputDirectory: URL
     var serverPort: Int = 8888
     var isServerRunning = false
     var isFetching = false
@@ -28,6 +31,8 @@ final class AppStore {
     let downloader = Downloader()
     private var server: PodcastServer?
     private var autoFetchTimer: Timer?
+    private let appSupportURL: URL
+    private let defaultOutputDirectory: URL
     private let stateFileURL: URL
     private var cancelAllDownloadsRequested = false
 
@@ -35,9 +40,14 @@ final class AppStore {
 
     init(
         stateFileURL: URL = Paths.stateFile,
+        appSupportURL: URL = Paths.appSupport,
+        defaultOutputDirectory: URL = Paths.defaultOutputDir,
         shouldLoadPersistentState: Bool = true,
         autoCheckDependencies: Bool = true
     ) {
+        self.outputDirectory = defaultOutputDirectory
+        self.appSupportURL = appSupportURL
+        self.defaultOutputDirectory = defaultOutputDirectory
         self.stateFileURL = stateFileURL
         AppLogger.info("Initialising store with state file \(stateFileURL.path)", category: "store")
         if shouldLoadPersistentState {
@@ -70,6 +80,11 @@ final class AppStore {
         )
         if let data = try? JSONEncoder().encode(state) {
             do {
+                try FileManager.default.createDirectory(
+                    at: stateFileURL.deletingLastPathComponent(),
+                    withIntermediateDirectories: true,
+                    attributes: nil
+                )
                 try data.write(to: stateFileURL)
                 AppLogger.info(
                     "Saved state with \(channels.count) channel(s), \(episodes.count) episode(s), output dir \(outputDirectory.path)",
@@ -552,6 +567,47 @@ final class AppStore {
         }
     }
 
+    @MainActor
+    func resetToDefaults() async {
+        AppLogger.warning("Resetting app to default state", category: "store")
+
+        statusMessage = "Resetting app…"
+        cancelAllDownloadsRequested = true
+        isFetching = false
+        isInstallingDeps = false
+
+        autoFetchTimer?.invalidate()
+        autoFetchTimer = nil
+
+        if hasActiveDownloads {
+            isStoppingDownloads = true
+            await downloader.cancelAllDownloads()
+            await waitForDownloadsToFinishCancelling()
+        }
+
+        server?.stop()
+        server = nil
+        isServerRunning = false
+
+        let previousOutputDirectory = outputDirectory
+        removeManagedOutputArtifacts(at: previousOutputDirectory)
+        removeAppSupportArtifacts()
+
+        channels.removeAll()
+        episodes.removeAll()
+        outputDirectory = defaultOutputDirectory
+        serverPort = Self.defaultServerPort
+        autoFetchInterval = Self.defaultAutoFetchInterval
+        autoStartServer = Self.defaultAutoStartServer
+        activeDownloads.removeAll()
+        downloadProgress.removeAll()
+        isStoppingDownloads = false
+        statusMessage = "Ready"
+
+        save()
+        await checkDependencies()
+    }
+
     private func pruneEpisodesWithoutChannels() -> Bool {
         let pruned = validEpisodes
         guard pruned.count != episodes.count else { return false }
@@ -564,8 +620,44 @@ final class AppStore {
         let temporaryRoot = FileManager.default.temporaryDirectory.standardizedFileURL.path
         let isTemporary = standardized.path.hasPrefix(temporaryRoot)
         if isTemporary {
-            return Paths.defaultOutputDir
+            return defaultOutputDirectory
         }
         return loadedDirectory
+    }
+
+    @MainActor
+    private func waitForDownloadsToFinishCancelling(timeoutNanoseconds: UInt64 = 2_000_000_000) async {
+        let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
+        while !activeDownloads.isEmpty && DispatchTime.now().uptimeNanoseconds < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+    }
+
+    private func removeManagedOutputArtifacts(at outputDirectory: URL) {
+        let fileManager = FileManager.default
+        let episodesDir = outputDirectory.appendingPathComponent("episodes", isDirectory: true)
+        let feedFile = outputDirectory.appendingPathComponent("feed.xml")
+
+        if fileManager.fileExists(atPath: episodesDir.path) {
+            try? fileManager.removeItem(at: episodesDir)
+        }
+        if fileManager.fileExists(atPath: feedFile.path) {
+            try? fileManager.removeItem(at: feedFile)
+        }
+    }
+
+    private func removeAppSupportArtifacts() {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: appSupportURL.path) else { return }
+
+        if let contents = try? fileManager.contentsOfDirectory(
+            at: appSupportURL,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) {
+            for url in contents {
+                try? fileManager.removeItem(at: url)
+            }
+        }
     }
 }
