@@ -201,9 +201,9 @@ struct ContentView: View {
         List(selection: $selection) {
             if store.channels.isEmpty {
                 ContentUnavailableView {
-                    Label("No Channels", systemImage: "antenna.radiowaves.left.and.right")
+                    Label("No Sources", systemImage: "antenna.radiowaves.left.and.right")
                 } description: {
-                    Text("Press + to add a YouTube channel.")
+                    Text("Press + to add a YouTube channel, playlist, or episode.")
                 }
                 .listRowSeparator(.hidden)
             } else {
@@ -211,7 +211,7 @@ struct ContentView: View {
                     .tag(SidebarItem.allEpisodes)
                     .badge(sidebarSummaryCount)
 
-                Section("Channels") {
+                Section("Sources") {
                     ForEach(store.channels) { channel in
                         ChannelRow(
                             channel: channel,
@@ -230,7 +230,7 @@ struct ContentView: View {
         .simultaneousGesture(TapGesture().onEnded {
             focusedPane = .sidebar
         })
-        .navigationTitle("Channels")
+        .navigationTitle("Sources")
         .onChange(of: selection) { old, new in
             enforceExclusiveSelection(old: old, new: new)
             if selection != old {
@@ -253,7 +253,7 @@ struct ContentView: View {
                     ContentUnavailableView {
                         Label("Get Started", systemImage: "plus.circle")
                     } description: {
-                        Text("Add a YouTube channel to begin downloading episodes.")
+                        Text("Add a YouTube channel, playlist, or episode to begin downloading audio.")
                     }
                 } else if showingAllEpisodes || !selectedChannelIDs.isEmpty {
                     EpisodeListView(
@@ -267,9 +267,9 @@ struct ContentView: View {
                     )
                 } else {
                     ContentUnavailableView {
-                        Label("Select a Channel", systemImage: "sidebar.left")
+                        Label("Select a Source", systemImage: "sidebar.left")
                     } description: {
-                        Text("Choose a channel from the sidebar, or select All Episodes.")
+                        Text("Choose a source from the sidebar, or select All Episodes.")
                     }
                 }
             }
@@ -300,9 +300,9 @@ struct ContentView: View {
         Button {
             showAddSheet = true
         } label: {
-            Label("Add Channel", systemImage: "plus")
+            Label("Add Source", systemImage: "plus")
         }
-        .help("Add a YouTube channel")
+        .help("Add a YouTube channel, playlist, or episode")
     }
 
     private var refreshSelectionButton: some View {
@@ -329,7 +329,7 @@ struct ContentView: View {
         .onHover { isHovering in
             isHoveringRefreshControl = store.isFetching && isHovering
         }
-        .help(store.isFetching ? "Stop current refresh" : "Refresh the selected channels")
+        .help(store.isFetching ? "Stop current refresh" : "Refresh the selected sources")
     }
 
     private var downloadSelectionButton: some View {
@@ -408,7 +408,7 @@ struct ContentView: View {
     private var deleteButtonHelpText: String {
         switch selectionContext {
         case .channels:
-            return "Delete the selected channels"
+            return "Delete the selected sources"
         case .episodes:
             return "Delete the selected episodes"
         case .none:
@@ -514,7 +514,7 @@ struct ContentView: View {
                 refreshChannels(targetIDs)
             } label: {
                 Label(
-                    targetIDs.count == 1 ? "Refresh Channel" : "Refresh Selected Channels",
+                    targetIDs.count == 1 ? "Refresh Source" : "Refresh Selected Sources",
                     systemImage: "arrow.clockwise"
                 )
             }
@@ -524,7 +524,7 @@ struct ContentView: View {
             deleteChannels(targetIDs)
         } label: {
             Label(
-                targetIDs.count == 1 ? "Delete Channel" : "Delete Selected Channels",
+                targetIDs.count == 1 ? "Delete Source" : "Delete Selected Sources",
                 systemImage: "trash"
             )
         }
@@ -565,7 +565,7 @@ struct ContentView: View {
                     ProgressView()
                         .controlSize(.small)
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Refreshing \(store.activeRefreshChannelIDs.count) channel\(store.activeRefreshChannelIDs.count == 1 ? "" : "s")")
+                        Text("Refreshing \(store.activeRefreshChannelIDs.count) source\(store.activeRefreshChannelIDs.count == 1 ? "" : "s")")
                             .font(.subheadline)
                         if let currentRefreshChannelName = store.currentRefreshChannelName {
                             Text("Currently checking \(currentRefreshChannelName)")
@@ -645,7 +645,7 @@ struct ChannelRow: View {
                     .font(.body)
                     .fontWeight(.medium)
                     .lineLimit(1)
-                Text("\(episodeCount) episode\(episodeCount == 1 ? "" : "s")")
+                Text("\(channel.sourceKind.sidebarSubtitlePrefix)\(episodeCount) episode\(episodeCount == 1 ? "" : "s")")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

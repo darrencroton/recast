@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-Recast converts YouTube channels into standard RSS podcast feeds. It has two implementations:
+Recast converts YouTube sources into standard RSS podcast feeds. A source can be a YouTube channel, playlist, or a one-off direct episode link. It has two implementations:
 
 1. **macOS App** (`Recast/`) — A SwiftUI desktop app that discovers, downloads, and serves YouTube content as MP3 podcast episodes via a local HTTP server.
 2. **Python CLI** (`cosmic_podcast.py`) — A standalone script originally built for the NSF-Simons Cosmic AI YouTube channel.
@@ -58,7 +58,7 @@ The repo-root `setup.sh` delegates to `Recast/setup.sh`. The built app bundle is
 ### Architecture
 - **MVVM**: `AppStore` (@Observable) holds all state; views read from it via `@Environment`
 - **Downloader** (actor): thread-safe yt-dlp/ffmpeg subprocess execution
-- **Discovery**: channel refresh uses yt-dlp playlist metadata for a faster first-pass listing
+- **Discovery**: collection-source refresh uses yt-dlp playlist metadata for a faster first-pass listing
 - **PodcastServer**: HTTP server using Apple's Network framework on a configurable port (default 8888)
 - **FeedGenerator**: Produces RSS 2.0 with iTunes podcast extensions
 - State persists to `~/Library/Application Support/Recast/state.json`
@@ -72,10 +72,12 @@ The repo-root `setup.sh` delegates to `Recast/setup.sh`. The built app bundle is
 - Use `actor` for thread-safe I/O and subprocess management
 - Use `async/await` and `Task {}` for concurrency
 - Error types conform to `LocalizedError`
+- Keep one unified saved-source model. Prefer extending existing source/channel flows over creating separate ad-hoc paths for direct episode URLs.
 - Keep episode ordering newest-first unless a feature explicitly calls for a different presentation
 - The `New` filter is "found in the most recent fetch for the current scope", not "all undownloaded episodes"
-- Channel and episode multi-selection are shared across `ContentView` and `EpisodeListView`; preserve standard macOS click, Shift-click, and Command-click behavior
-- Toolbar actions are split into global actions (server, QR code, add channel) and selection-scoped actions (refresh, download, delete); keep right-click menus aligned with the same selection rules
+- Adding a direct episode URL should stay consistent with Recast's existing explicit-download model unless the user requests otherwise: add/save first, then download via normal download controls.
+- Source and episode multi-selection are shared across `ContentView` and `EpisodeListView`; preserve standard macOS click, Shift-click, and Command-click behavior
+- Toolbar actions are split into global actions (server, QR code, add source) and selection-scoped actions (refresh, download, delete); keep right-click menus aligned with the same selection rules
 - Reset only removes Recast-managed output artifacts and installed tools; diagnostic logs are intentionally preserved
 
 ### Running Tests
@@ -95,9 +97,9 @@ xcodebuild test -scheme Recast -destination 'platform=macOS'
 The `RecastTests` target uses XCTest with `@testable import Recast`. The suite currently covers:
 
 - **`EpisodeTests`** — `isDownloaded` computed property; `formattedDuration` edge cases (zero, sub-minute, hour boundaries, padding)
-- **`ModelTests`** — filename generation, backwards-compatible episode decoding, publish-date fallbacks, yt-dlp list parsing (including flat-playlist duration parsing), downloader progress parsing, and progress weighting helpers
+- **`ModelTests`** — filename generation, backwards-compatible episode/channel decoding, publish-date fallbacks, yt-dlp list parsing (including flat-playlist duration parsing), downloader progress parsing, and progress weighting helpers
 - **`FeedGeneratorTests`** — `xmlEscape` (all five XML special chars); `formatDuration` (HH:MM:SS); `rfc2822` date format; `write()` end-to-end (file creation, episode inclusion/exclusion, enclosure URLs, GUIDs, XML escaping, input-order preservation, nested episode/artwork paths)
-- **`StoreTests`** — `normalizeYouTubeURL` (mobile→desktop, `/videos` suffix, playlist URLs, whitespace); `episodes(for:)` (filtering, sort order); filtered counts; `regenerateFeed()` (output file, filtering, sort order, port in URLs); persistence hygiene; downloader artifact cleanup; nested output-path cleanup; reset safety for managed cleanup and preservation of unowned artifacts
+- **`StoreTests`** — `normalizeYouTubeURL` (mobile→desktop, `/videos` suffix, direct episode canonicalisation, playlist URLs, whitespace); `episodes(for:)` (filtering, sort order); filtered counts; `regenerateFeed()` (output file, filtering, sort order, port in URLs); persistence hygiene; downloader artifact cleanup; nested output-path cleanup; one-off source cleanup; reset safety for managed cleanup and preservation of unowned artifacts
 
 **What is not tested:** live `yt-dlp`/`ffmpeg` subprocess execution, end-to-end media conversion timing, and `PodcastServer` on real network ports. Downloader parsing/cleanup helpers are unit tested, but real downloads remain integration-test territory.
 

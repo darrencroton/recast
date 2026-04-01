@@ -97,6 +97,23 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.normalizeYouTubeURL(url), url)
     }
 
+    // MARK: - normalizeYouTubeURL: direct episode URLs canonicalised
+
+    func test_normalize_shortURL_convertedToWatchURL() {
+        let result = store.normalizeYouTubeURL("https://youtu.be/MBg7WxnLzfA")
+        XCTAssertEqual(result, "https://www.youtube.com/watch?v=MBg7WxnLzfA")
+    }
+
+    func test_normalize_watchURL_stripsExtraParameters() {
+        let result = store.normalizeYouTubeURL("https://www.youtube.com/watch?v=MBg7WxnLzfA&t=42s&feature=youtu.be")
+        XCTAssertEqual(result, "https://www.youtube.com/watch?v=MBg7WxnLzfA")
+    }
+
+    func test_normalize_shortsURL_convertedToWatchURL() {
+        let result = store.normalizeYouTubeURL("https://www.youtube.com/shorts/MBg7WxnLzfA?feature=share")
+        XCTAssertEqual(result, "https://www.youtube.com/watch?v=MBg7WxnLzfA")
+    }
+
     // MARK: - normalizeYouTubeURL: whitespace
 
     func test_normalize_leadingAndTrailingWhitespaceStripped() {
@@ -340,6 +357,23 @@ final class StoreTests: XCTestCase {
         store.deleteEpisodes([ep.id])
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: artworkPath.path))
+    }
+
+    func test_deleteEpisodes_removesEmptySingleEpisodeSource() {
+        let source = Channel(
+            url: "https://www.youtube.com/watch?v=solo123",
+            name: "Solo Creator",
+            sourceKind: .singleEpisode,
+            relatedCollectionURL: "https://www.youtube.com/@solo/videos"
+        )
+        let episode = makeEpisode(channelID: source.id, videoID: "solo123")
+        store.channels = [source]
+        store.episodes = [episode]
+
+        store.deleteEpisodes([episode.id])
+
+        XCTAssertTrue(store.channels.isEmpty)
+        XCTAssertTrue(store.episodes.isEmpty)
     }
 
     func test_deleteEpisodes_removesNestedMP3File() throws {

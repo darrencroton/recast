@@ -329,6 +329,62 @@ actor Downloader {
         let durationSeconds: Int
     }
 
+    struct ResolvedVideoSource {
+        let video: VideoInfo
+        let channelName: String
+        let collectionURL: String?
+    }
+
+    func resolveVideoSource(url: String) async throws -> ResolvedVideoSource {
+        guard let ytdlp = ytDlpPath() else { throw DownloaderError.dependencyMissing("yt-dlp") }
+        let output = try await runProcess(
+            ytdlp,
+            arguments: [
+                "--no-playlist",
+                "--no-warnings",
+                "--print",
+                "%(id)s\t%(title)s\t%(upload_date)s\t%(timestamp)s\t%(release_timestamp)s\t%(duration)s\t%(channel)s\t%(channel_url)s\t%(uploader_url)s",
+                url,
+            ]
+        )
+
+        guard let line = output
+            .split(separator: "\n")
+            .map(String.init)
+            .first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        else {
+            throw DownloaderError.parseError
+        }
+
+        let parts = line.split(
+            separator: "\t",
+            maxSplits: 8,
+            omittingEmptySubsequences: false
+        ).map(String.init)
+        guard parts.count >= 9 else {
+            throw DownloaderError.parseError
+        }
+
+        let collectionURL = [parts[7], parts[8]]
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .first(where: { !$0.isEmpty && $0 != "NA" })
+
+        return ResolvedVideoSource(
+            video: VideoInfo(
+                videoID: parts[0],
+                title: parts[1],
+                publishDate: Self.publishedDate(
+                    uploadDate: parts[2],
+                    timestamp: parts[3],
+                    releaseTimestamp: parts[4]
+                ),
+                durationSeconds: Self.parseDurationSeconds(parts[5])
+            ),
+            channelName: parts[6].trimmingCharacters(in: .whitespacesAndNewlines),
+            collectionURL: collectionURL
+        )
+    }
+
     func listVideos(channelURL: String, max: Int = 50) async throws -> [VideoInfo] {
         guard let ytdlp = ytDlpPath() else { throw DownloaderError.dependencyMissing("yt-dlp") }
         let processOutput = try await runListingProcessCapturingOutput(

@@ -1,6 +1,6 @@
 # Recast
 
-A native macOS app that turns YouTube channels into a podcast feed. Add channels, fetch new talks, and subscribe in any podcast app on your phone.
+A native macOS app that turns YouTube channels and one-off YouTube episodes into a podcast feed. Add sources, fetch new talks, and subscribe in any podcast app on your phone.
 
 ## Quick Start
 
@@ -27,8 +27,8 @@ For day-to-day development, the repo-root `./setup.sh` is the intended entry poi
 
 ## How It Works
 
-1. **Add channels** — Press `+` and paste a YouTube channel or playlist URL
-2. **Refresh channels** — Select one or more channels, then press Refresh to discover new episodes
+1. **Add sources** — Press `+` and paste a YouTube channel, playlist, or direct episode URL
+2. **Refresh sources** — Select one or more sidebar sources, then press Refresh to discover episodes
 3. **Download what you want** — Download individual episodes, or multi-select episodes with standard macOS selection for batch download/delete
 4. **Subscribe** — Start the built-in podcast server and scan the QR code from your phone
 
@@ -46,7 +46,8 @@ You can also manually add the feed URL shown in the status bar or Settings.
 ## Features
 
 ### Core
-- **Channel management** — Add/remove YouTube channels and playlists
+- **Source management** — Add/remove YouTube channels, playlists, and one-off episode links
+- **Direct episode capture** — Paste a `watch`, `youtu.be`, or `shorts` URL to save just that episode without subscribing to the full channel
 - **Episode discovery** — Refresh finds new episodes without downloading; you choose what to grab
 - **Responsive refresh** — Discovery uses YouTube playlist metadata for fast first-pass episode detection
 - **Selective download** — Download individual episodes or selected episodes
@@ -56,10 +57,10 @@ You can also manually add the feed URL shown in the status bar or Settings.
 - **Built-in server** — HTTP server hosts your feed on the local network
 
 ### Search & Browse
-- **All Episodes view** — See every episode across all channels in one list
-- **Search** — Filter episodes by title across all channels
+- **All Episodes view** — See every episode across all saved sources in one list
+- **Search** — Filter episodes by title across all saved sources
 - **Episode filters** — Quick-filter by All, Downloaded, New (found in the latest fetch for the current scope), or Unplayed
-- **Native multi-selection** — Click, Shift-click, and Command-click work like Finder for channels and episodes
+- **Native multi-selection** — Click, Shift-click, and Command-click work like Finder for sources and episodes
 - **Selection-aware actions** — Toolbar and right-click menus expose Refresh, Download, and Delete for the current selection
 - **Played/Unplayed** — Mark episodes to track what you've listened to
 
@@ -70,7 +71,7 @@ You can also manually add the feed URL shown in the status bar or Settings.
 ### Convenience
 - **QR code** — One-tap QR code with your feed URL for instant phone setup
 - **Reveal in Finder** — Right-click any downloaded episode to open it in Finder
-- **Channel-organised storage** — Downloaded audio lives under `episodes/<Channel Name [id]>` inside the chosen output folder
+- **Source-organised storage** — Downloaded audio lives under `episodes/<Channel Name [id]>` inside the chosen output folder, including one-off episode sources
 - **Channel monograms** — Visual channel identity with colour-coded initials
 - **Episode deletion** — Remove episodes (and their audio files) from within the app
 - **Diagnostics log** — File-backed logs live at `~/Library/Application Support/Recast/logs/recast.log`
@@ -84,7 +85,7 @@ Open **Recast > Settings** (Cmd+,) to configure:
 - **Auto-start server** — launch the podcast server when the app opens
 - **Auto-fetch interval** — check for new episodes on a schedule
 - **Dependency status** — confirm whether `yt-dlp` and `ffmpeg` are installed
-- **Reset App to Defaults** — clears saved channels, episode state, Recast-managed downloads and feeds, and installed tools while keeping diagnostic logs
+- **Reset App to Defaults** — clears saved sources, episode state, Recast-managed downloads and feeds, and installed tools while keeping diagnostic logs
   The next launch will re-download `yt-dlp` and `ffmpeg` as needed.
 
 ## Running Tests
@@ -101,7 +102,7 @@ cd Recast
 xcodebuild test -scheme Recast -destination 'platform=macOS'
 ```
 
-The test suite currently covers reset safety, episode models, RSS feed generation, XML escaping, store logic, search filtering, channel-organised output paths, episode management, downloader parsing/cleanup helpers, and persistence hygiene. See `RecastTests/` for details.
+The test suite currently covers reset safety, episode models, RSS feed generation, XML escaping, store logic, search filtering, source-organised output paths, episode management, downloader parsing/cleanup helpers, and persistence hygiene. See `RecastTests/` for details.
 
 ## CLI Alternative
 
@@ -125,7 +126,7 @@ Recast/               macOS SwiftUI app
 │   ├── Store.swift           App state, persistence, business logic
 │   ├── ContentView.swift     Main split view, selection-aware toolbar, QR code, status bar
 │   ├── EpisodeListView.swift Episode list, native multi-selection, context menus, progress
-│   ├── AddChannelSheet.swift Add-channel modal
+│   ├── AddChannelSheet.swift Add-source modal
 │   ├── SettingsView.swift    Preferences window
 │   ├── Downloader.swift      yt-dlp/ffmpeg wrapper with progress/cancellation
 │   ├── FeedGenerator.swift   RSS feed builder

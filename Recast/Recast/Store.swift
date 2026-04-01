@@ -6,6 +6,22 @@ final class AppStore {
     private static let defaultAutoFetchInterval = 0
     private static let defaultAutoStartServer = false
 
+    private enum ResolvedYouTubeInput {
+        case collection(url: String)
+        case singleVideo(url: String, videoID: String)
+    }
+
+    private enum AddSourceError: LocalizedError {
+        case invalidYouTubeURL
+
+        var errorDescription: String? {
+            switch self {
+            case .invalidYouTubeURL:
+                return "Please enter a valid YouTube channel, playlist, or episode URL."
+            }
+        }
+    }
+
     // MARK: - State
 
     var channels: [Channel] = []
@@ -200,18 +216,83 @@ final class AppStore {
 
     @MainActor
     func addChannel(url: String) async throws {
+        try await addSource(url: url)
+    }
+
+    @MainActor
+    func addSource(url: String) async throws {
         let operationToken = operationGeneration
         let cleaned = normalizeYouTubeURL(url)
-        guard !channels.contains(where: { $0.url == cleaned }) else { return }
-        statusMessage = "Resolving channel…"
-        AppLogger.info("Adding channel from \(cleaned)", category: "channels")
-        let name = try await downloader.resolveChannelName(url: cleaned)
-        guard isCurrentOperation(operationToken) else { return }
-        let channel = Channel(url: cleaned, name: name)
-        channels.append(channel)
-        save()
-        statusMessage = "Added \(name)"
-        AppLogger.info("Added channel \(name) with id \(channel.id)", category: "channels")
+        guard let input = resolvedYouTubeInput(for: cleaned) else {
+            throw AddSourceError.invalidYouTubeURL
+        }
+
+        switch input {
+        case .collection(let collectionURL):
+            guard !channels.contains(where: { $0.url == collectionURL }) else {
+                statusMessage = "Source already added"
+                return
+            }
+
+            statusMessage = "Resolving source…"
+            AppLogger.info("Adding collection source from \(collectionURL)", category: "channels")
+            let name = try await downloader.resolveChannelName(url: collectionURL)
+            guard isCurrentOperation(operationToken) else { return }
+
+            let channel = Channel(url: collectionURL, name: name)
+            channels.append(channel)
+            save()
+            statusMessage = "Added \(name)"
+            AppLogger.info("Added collection source \(name) with id \(channel.id)", category: "channels")
+
+        case .singleVideo(let videoURL, _):
+            statusMessage = "Resolving episode…"
+            AppLogger.info("Adding single-episode source from \(videoURL)", category: "channels")
+            let resolvedVideo = try await downloader.resolveVideoSource(url: videoURL)
+            guard isCurrentOperation(operationToken) else { return }
+            let normalizedCollectionURL = resolvedVideo.collectionURL.map(normalizeYouTubeURL)
+
+            if episodes.contains(where: { $0.videoID == resolvedVideo.video.videoID }) {
+                statusMessage = "Episode already added"
+                AppLogger.info("Skipped single-episode source for \(resolvedVideo.video.videoID); episode already exists", category: "channels")
+                return
+            }
+
+            if let collectionURL = normalizedCollectionURL,
+               let existingCollection = channels.first(where: {
+                   $0.sourceKind == .collection && $0.url == collectionURL
+               }) {
+                appendEpisodeIfNeeded(resolvedVideo.video, to: existingCollection.id, markAsNew: false)
+                save()
+                statusMessage = "Added episode to \(existingCollection.name)"
+                AppLogger.info(
+                    "Added episode \(resolvedVideo.video.videoID) to existing source \(existingCollection.name)",
+                    category: "channels"
+                )
+                return
+            }
+
+            guard !channels.contains(where: { $0.url == videoURL }) else {
+                statusMessage = "Source already added"
+                return
+            }
+
+            let sourceName = resolvedVideo.channelName.isEmpty ? resolvedVideo.video.title : resolvedVideo.channelName
+            let channel = Channel(
+                url: videoURL,
+                name: sourceName,
+                sourceKind: .singleEpisode,
+                relatedCollectionURL: normalizedCollectionURL
+            )
+            channels.append(channel)
+            appendEpisodeIfNeeded(resolvedVideo.video, to: channel.id, markAsNew: false)
+            save()
+            statusMessage = "Added episode from \(sourceName)"
+            AppLogger.info(
+                "Added single-episode source \(sourceName) with video \(resolvedVideo.video.videoID)",
+                category: "channels"
+            )
+        }
     }
 
     func removeChannels(_ ids: Set<UUID>) {
@@ -246,7 +327,7 @@ final class AppStore {
         var totalNew = 0
         var fetchErrors: [String] = []
         var wasCancelled = false
-        AppLogger.info("Starting fetch for \(targets.count) channel(s)", category: "fetch")
+        AppLogger.info("Starting fetch for \(targets.count) source(s)", category: "fetch")
 
         clearNewFlags(for: targetChannelIDs)
 
@@ -259,25 +340,17 @@ final class AppStore {
             currentRefreshChannelID = channel.id
             statusMessage = "Checking \(channel.name)…"
             do {
-                let videos = try await downloader.listVideos(channelURL: channel.url)
+                let videos = try await videosForFetch(for: channel)
                 guard isCurrentOperation(operationToken) else { return false }
-                let knownIDs = Set(episodes.filter { $0.channelID == channel.id }.map(\.videoID))
                 AppLogger.info(
-                    "Fetched \(videos.count) candidate video(s) for \(channel.name); \(knownIDs.count) already known",
+                    "Fetched \(videos.count) candidate video(s) for \(channel.name)",
                     category: "fetch"
                 )
 
-                for video in videos where !knownIDs.contains(video.videoID) {
-                    var ep = Episode(
-                        channelID: channel.id,
-                        videoID: video.videoID,
-                        title: video.title,
-                        publishDate: video.publishDate,
-                        durationSeconds: video.durationSeconds
-                    )
-                    ep.isNew = true
-                    episodes.append(ep)
-                    totalNew += 1
+                for video in videos {
+                    if handleFetchedVideo(video, for: channel) {
+                        totalNew += 1
+                    }
                 }
             } catch DownloaderError.cancelled {
                 guard isCurrentOperation(operationToken) else { return false }
@@ -292,6 +365,7 @@ final class AppStore {
             }
         }
 
+        pruneEmptySingleEpisodeSources()
         guard isCurrentOperation(operationToken) else { return false }
         save()
         if wasCancelled {
@@ -304,7 +378,7 @@ final class AppStore {
             } else {
                 statusMessage = fetchErrors.count == 1
                     ? "Fetch failed for \(fetchErrors[0])"
-                    : "Fetch failed for \(fetchErrors.count) channels"
+                    : "Fetch failed for \(fetchErrors.count) sources"
             }
         } else {
             statusMessage = totalNew > 0 ? "Found \(totalNew) new episode(s)" : "No new episodes"
@@ -436,6 +510,7 @@ final class AppStore {
         removeManagedEpisodeArtifacts(for: targetEpisodes, channels: channels, in: outputDirectory)
         removeManagedEpisodesDirectoryIfEmptyAndOwned(at: episodesDir)
         episodes.removeAll { ids.contains($0.id) }
+        pruneEmptySingleEpisodeSources()
         save()
         regenerateFeed()
     }
@@ -624,12 +699,32 @@ final class AppStore {
     }
 
     func normalizeYouTubeURL(_ url: String) -> String {
-        var u = url.trimmingCharacters(in: .whitespacesAndNewlines)
-        u = u.replacingOccurrences(of: "https://m.youtube.com", with: "https://www.youtube.com")
-        if u.contains("/@") && !u.hasSuffix("/videos") && !u.contains("/playlist") {
-            u = u.hasSuffix("/") ? u + "videos" : u + "/videos"
+        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var components = URLComponents(string: trimmed), let host = components.host?.lowercased() else {
+            return trimmed
         }
-        return u
+
+        if host == "youtu.be" {
+            let videoID = components.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            if !videoID.isEmpty {
+                return "https://www.youtube.com/watch?v=\(videoID)"
+            }
+            return trimmed
+        }
+
+        let normalizedHost = host == "m.youtube.com" ? "www.youtube.com" : host
+        components.scheme = "https"
+        components.host = normalizedHost
+
+        if let videoID = Self.extractDirectVideoID(from: components) {
+            return "https://www.youtube.com/watch?v=\(videoID)"
+        }
+
+        var normalizedURL = components.string ?? trimmed
+        if normalizedURL.contains("/@") && !normalizedURL.hasSuffix("/videos") && !normalizedURL.contains("/playlist") {
+            normalizedURL = normalizedURL.hasSuffix("/") ? normalizedURL + "videos" : normalizedURL + "/videos"
+        }
+        return normalizedURL
     }
 
     private func sortEpisodesNewestFirst(_ episodes: [Episode]) -> [Episode] {
@@ -756,6 +851,93 @@ final class AppStore {
         guard pruned.count != episodes.count else { return false }
         episodes = pruned
         return true
+    }
+
+    private func videosForFetch(for channel: Channel) async throws -> [Downloader.VideoInfo] {
+        switch channel.sourceKind {
+        case .collection:
+            return try await downloader.listVideos(channelURL: channel.url)
+        case .singleEpisode:
+            return [try await downloader.resolveVideoSource(url: channel.url).video]
+        }
+    }
+
+    private func handleFetchedVideo(_ video: Downloader.VideoInfo, for channel: Channel) -> Bool {
+        if let existingIndex = episodes.firstIndex(where: { $0.videoID == video.videoID }) {
+            if episodes[existingIndex].channelID == channel.id {
+                return false
+            }
+
+            if canMergeSingleEpisodeSource(at: existingIndex, into: channel) {
+                episodes[existingIndex].channelID = channel.id
+                pruneEmptySingleEpisodeSources()
+            }
+            return false
+        }
+
+        appendEpisodeIfNeeded(video, to: channel.id, markAsNew: true)
+        return true
+    }
+
+    private func appendEpisodeIfNeeded(_ video: Downloader.VideoInfo, to channelID: UUID, markAsNew: Bool) {
+        guard !episodes.contains(where: { $0.videoID == video.videoID }) else { return }
+        var episode = Episode(
+            channelID: channelID,
+            videoID: video.videoID,
+            title: video.title,
+            publishDate: video.publishDate,
+            durationSeconds: video.durationSeconds
+        )
+        episode.isNew = markAsNew
+        episodes.append(episode)
+    }
+
+    private func canMergeSingleEpisodeSource(at episodeIndex: Int, into channel: Channel) -> Bool {
+        guard channel.sourceKind == .collection else { return false }
+        guard let sourceChannel = channels.first(where: { $0.id == episodes[episodeIndex].channelID }) else { return false }
+        guard sourceChannel.sourceKind == .singleEpisode else { return false }
+        return sourceChannel.relatedCollectionURL == channel.url
+    }
+
+    private func pruneEmptySingleEpisodeSources() {
+        let channelIDsWithEpisodes = Set(episodes.map(\.channelID))
+        channels.removeAll { channel in
+            channel.isSingleEpisodeSource && !channelIDsWithEpisodes.contains(channel.id)
+        }
+    }
+
+    private func resolvedYouTubeInput(for normalizedURL: String) -> ResolvedYouTubeInput? {
+        if let components = URLComponents(string: normalizedURL),
+           let videoID = Self.extractDirectVideoID(from: components) {
+            return .singleVideo(url: normalizedURL, videoID: videoID)
+        }
+
+        guard let components = URLComponents(string: normalizedURL),
+              let host = components.host?.lowercased(),
+              host.contains("youtube.com"),
+              !components.path.isEmpty else {
+            return nil
+        }
+
+        return .collection(url: normalizedURL)
+    }
+
+    private static func extractDirectVideoID(from components: URLComponents) -> String? {
+        let path = components.path
+
+        if path == "/watch" {
+            return components.queryItems?.first(where: { $0.name == "v" })?.value
+        }
+
+        for prefix in ["/shorts/", "/live/", "/embed/"] where path.hasPrefix(prefix) {
+            let suffix = path.dropFirst(prefix.count)
+            let videoID = suffix.split(separator: "/").first.map(String.init)
+            if let videoID, !videoID.isEmpty {
+                return videoID
+            }
+        }
+
+        return nil
     }
 
     private func sanitizedOutputDirectory(_ loadedDirectory: URL) -> URL {

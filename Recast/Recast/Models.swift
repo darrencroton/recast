@@ -54,17 +54,58 @@ struct DownloadStatus: Equatable {
     var phase: DownloadPhase
 }
 
+enum ChannelSourceKind: String, Codable, Hashable {
+    case collection
+    case singleEpisode
+
+    var sidebarSubtitlePrefix: String {
+        switch self {
+        case .collection:
+            return ""
+        case .singleEpisode:
+            return "Saved "
+        }
+    }
+}
+
 struct Channel: Identifiable, Codable, Hashable {
     var id: UUID
     var url: String
     var name: String
     var dateAdded: Date
+    var sourceKind: ChannelSourceKind
+    var relatedCollectionURL: String?
 
-    init(url: String, name: String) {
+    init(
+        url: String,
+        name: String,
+        sourceKind: ChannelSourceKind = .collection,
+        relatedCollectionURL: String? = nil
+    ) {
         self.id = UUID()
         self.url = url
         self.name = name
         self.dateAdded = .now
+        self.sourceKind = sourceKind
+        self.relatedCollectionURL = relatedCollectionURL
+    }
+
+    var isSingleEpisodeSource: Bool {
+        sourceKind == .singleEpisode
+    }
+
+    enum CodingKeys: String, CodingKey {
+        case id, url, name, dateAdded, sourceKind, relatedCollectionURL
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        url = try c.decode(String.self, forKey: .url)
+        name = try c.decode(String.self, forKey: .name)
+        dateAdded = try c.decode(Date.self, forKey: .dateAdded)
+        sourceKind = try c.decodeIfPresent(ChannelSourceKind.self, forKey: .sourceKind) ?? .collection
+        relatedCollectionURL = try c.decodeIfPresent(String.self, forKey: .relatedCollectionURL)
     }
 }
 

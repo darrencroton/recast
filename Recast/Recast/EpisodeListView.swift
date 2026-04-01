@@ -43,7 +43,7 @@ struct EpisodeListView: View {
                 ContentUnavailableView {
                     Label("No Episodes", systemImage: "waveform")
                 } description: {
-                    Text("Select a channel, then press Refresh to check for new episodes.")
+                    Text("Select a source, then press Refresh to check for episodes.")
                 }
             } else if episodes.isEmpty {
                 ContentUnavailableView {
@@ -147,7 +147,7 @@ struct EpisodeListView: View {
            let ch = store.channels.first(where: { channelIDs.contains($0.id) }) {
             return ch.name
         }
-        if channelIDs.count > 1 { return "\(channelIDs.count) Channels" }
+        if channelIDs.count > 1 { return "\(channelIDs.count) Sources" }
         return "Episodes"
     }
 
@@ -173,7 +173,7 @@ struct EpisodeRow: View {
     @State private var isHoveringActionControl = false
 
     private var channelName: String {
-        store.channels.first(where: { $0.id == episode.channelID })?.name ?? "Unknown Channel"
+        store.channels.first(where: { $0.id == episode.channelID })?.name ?? "Unknown Source"
     }
 
     private var isCurrentDownload: Bool {

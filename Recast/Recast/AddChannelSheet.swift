@@ -9,15 +9,15 @@ struct AddChannelSheet: View {
 
     var body: some View {
         VStack(spacing: 20) {
-            Text("Add Channel")
+            Text("Add Channel or Episode")
                 .font(.title2)
                 .fontWeight(.semibold)
 
-            Text("Paste a YouTube channel or playlist URL.")
+            Text("Paste a YouTube channel, playlist, or direct episode URL.")
                 .font(.body)
                 .foregroundStyle(.secondary)
 
-            TextField("https://www.youtube.com/@channel", text: $urlText)
+            TextField("https://www.youtube.com/@channel or https://www.youtube.com/watch?v=...", text: $urlText)
                 .textFieldStyle(.roundedBorder)
                 .frame(width: 400)
                 .onSubmit { add() }
@@ -43,7 +43,7 @@ struct AddChannelSheet: View {
             }
 
             if isAdding {
-                ProgressView("Resolving channel…")
+                ProgressView("Resolving source…")
                     .controlSize(.small)
             }
         }
@@ -63,7 +63,7 @@ struct AddChannelSheet: View {
         isAdding = true
         Task {
             do {
-                try await store.addChannel(url: url)
+                try await store.addSource(url: url)
                 dismiss()
             } catch {
                 errorMessage = error.localizedDescription

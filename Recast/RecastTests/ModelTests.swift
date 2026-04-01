@@ -200,6 +200,39 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(decoded.id, ch.id)
         XCTAssertEqual(decoded.url, ch.url)
         XCTAssertEqual(decoded.name, ch.name)
+        XCTAssertEqual(decoded.sourceKind, .collection)
+    }
+
+    func testChannelDecodesWithoutSourceKind_defaultsToCollection() throws {
+        let json = """
+        {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "url": "https://www.youtube.com/@ch/videos",
+            "name": "Legacy Channel",
+            "dateAdded": 0
+        }
+        """
+
+        let data = json.data(using: .utf8)!
+        let channel = try JSONDecoder().decode(Channel.self, from: data)
+
+        XCTAssertEqual(channel.sourceKind, .collection)
+        XCTAssertNil(channel.relatedCollectionURL)
+    }
+
+    func testChannelCodableRoundTrip_preservesSingleEpisodeMetadata() throws {
+        let channel = Channel(
+            url: "https://www.youtube.com/watch?v=abc123",
+            name: "Example Creator",
+            sourceKind: .singleEpisode,
+            relatedCollectionURL: "https://www.youtube.com/@creator/videos"
+        )
+
+        let data = try JSONEncoder().encode(channel)
+        let decoded = try JSONDecoder().decode(Channel.self, from: data)
+
+        XCTAssertEqual(decoded.sourceKind, .singleEpisode)
+        XCTAssertEqual(decoded.relatedCollectionURL, "https://www.youtube.com/@creator/videos")
     }
 
     func testPublishedDate_prefersUploadDate() {
