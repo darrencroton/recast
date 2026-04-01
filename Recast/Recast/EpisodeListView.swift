@@ -5,8 +5,8 @@ struct EpisodeListView: View {
     let channelIDs: Set<UUID>
     let searchQuery: String
     @Binding var filterMode: EpisodeFilter
-    @Binding var isSelectionMode: Bool
-    @State private var selectedEpisodeIDs: Set<UUID> = []
+    @Binding var selectedEpisodeIDs: Set<UUID>
+    let onActivateSelection: () -> Void
 
     private var episodes: [Episode] {
         store.filteredEpisodes(for: channelIDs, query: searchQuery, filter: filterMode)
@@ -20,8 +20,8 @@ struct EpisodeListView: View {
         Set(episodes.map(\.id))
     }
 
-    private var selectedEpisodes: [Episode] {
-        episodes.filter { selectedEpisodeIDs.contains($0.id) }
+    private var selectedEpisodesByID: [UUID: Episode] {
+        Dictionary(uniqueKeysWithValues: episodes.map { ($0.id, $0) })
     }
 
     var body: some View {
@@ -30,7 +30,7 @@ struct EpisodeListView: View {
                 ContentUnavailableView {
                     Label("No Episodes", systemImage: "waveform")
                 } description: {
-                    Text("Press Fetch to check for new episodes.")
+                    Text("Select a channel, then press Refresh to check for new episodes.")
                 }
             } else if episodes.isEmpty {
                 ContentUnavailableView {
@@ -39,86 +39,29 @@ struct EpisodeListView: View {
                     Text("No episodes match the current filter.")
                 }
             } else {
-                List(episodes) { episode in
+                List(episodes, selection: $selectedEpisodeIDs) { episode in
                     EpisodeRow(
                         episode: episode,
                         isDownloading: store.activeDownloads.contains(episode.videoID),
                         progress: store.downloadProgress[episode.videoID],
-                        showChannelName: showChannelName,
-                        isSelectionMode: isSelectionMode,
-                        isSelected: selectedEpisodeIDs.contains(episode.id)
+                        showChannelName: showChannelName
                     )
-                    .contentShape(Rectangle())
                     .tag(episode.id)
-                    .onTapGesture {
-                        guard isSelectionMode else { return }
-                        toggleSelection(for: episode.id)
-                    }
                     .contextMenu { episodeContextMenu(for: episode) }
                 }
                 .listStyle(.inset)
+                .simultaneousGesture(TapGesture().onEnded {
+                    onActivateSelection()
+                })
             }
         }
         .navigationTitle(navigationTitle)
         .onChange(of: visibleEpisodeIDs) { _, newValue in
             selectedEpisodeIDs.formIntersection(newValue)
-            if newValue.isEmpty {
-                isSelectionMode = false
-            }
         }
-        .toolbar {
-            ToolbarItem(placement: .automatic) {
-                Picker("Filter", selection: $filterMode) {
-                    ForEach(EpisodeFilter.allCases, id: \.self) { filter in
-                        Text(filter.rawValue).tag(filter)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .help("Filter episodes")
-            }
-
-            ToolbarItemGroup(placement: .primaryAction) {
-                if isSelectionMode {
-                    Button {
-                        let targetIDs = selectedEpisodeIDs
-                        Task {
-                            await store.downloadEpisodes(targetIDs)
-                            selectedEpisodeIDs = Set(
-                                episodes
-                                    .filter { targetIDs.contains($0.id) && !$0.isDownloaded }
-                                    .map(\.id)
-                            )
-                            if selectedEpisodeIDs.isEmpty {
-                                isSelectionMode = false
-                            }
-                        }
-                    } label: {
-                        Label("Download Selected", systemImage: "arrow.down.circle")
-                    }
-                    .disabled(
-                        selectedEpisodes.isEmpty ||
-                        selectedEpisodes.allSatisfy { $0.isDownloaded || store.activeDownloads.contains($0.videoID) }
-                    )
-
-                    Button(role: .destructive) {
-                        store.deleteEpisodes(selectedEpisodeIDs)
-                        selectedEpisodeIDs.removeAll()
-                        isSelectionMode = false
-                    } label: {
-                        Label("Delete Selected", systemImage: "trash")
-                    }
-                    .disabled(selectedEpisodeIDs.isEmpty)
-                }
-
-                Button {
-                    if isSelectionMode {
-                        selectedEpisodeIDs.removeAll()
-                    }
-                    isSelectionMode.toggle()
-                } label: {
-                    Label(isSelectionMode ? "Done" : "Select", systemImage: isSelectionMode ? "checkmark.circle" : "checklist")
-                }
-                .disabled(episodes.isEmpty)
+        .onChange(of: selectedEpisodeIDs) { _, newValue in
+            if !newValue.isEmpty {
+                onActivateSelection()
             }
         }
     }
@@ -127,41 +70,55 @@ struct EpisodeListView: View {
 
     @ViewBuilder
     private func episodeContextMenu(for episode: Episode) -> some View {
-        if store.activeDownloads.contains(episode.videoID) {
+        let targetIDs = contextTargetIDs(for: episode.id)
+        let targetEpisodes = targetIDs.compactMap { selectedEpisodesByID[$0] }
+
+        if canDownload(targetEpisodes) {
+            Button {
+                Task { await store.downloadEpisodes(targetIDs) }
+            } label: {
+                Label(
+                    targetIDs.count == 1 ? "Download Episode" : "Download Selected Episodes",
+                    systemImage: "arrow.down.circle"
+                )
+            }
+        }
+
+        if targetIDs.count == 1, let targetEpisode = targetEpisodes.first, store.activeDownloads.contains(targetEpisode.videoID) {
             Button(role: .destructive) {
-                store.stopDownload(videoID: episode.videoID)
+                store.stopDownload(videoID: targetEpisode.videoID)
             } label: {
                 Label("Stop Download", systemImage: "stop.circle")
             }
-        } else if episode.isDownloaded {
+        } else if targetIDs.count == 1, let targetEpisode = targetEpisodes.first, targetEpisode.isDownloaded {
+            Divider()
+
             Button {
-                store.togglePlayed(episode.id)
+                store.togglePlayed(targetEpisode.id)
             } label: {
                 Label(
-                    episode.isPlayed ? "Mark as Unplayed" : "Mark as Played",
-                    systemImage: episode.isPlayed ? "circle" : "checkmark.circle"
+                    targetEpisode.isPlayed ? "Mark as Unplayed" : "Mark as Played",
+                    systemImage: targetEpisode.isPlayed ? "circle" : "checkmark.circle"
                 )
             }
 
             Button {
-                store.revealInFinder(episode)
+                store.revealInFinder(targetEpisode)
             } label: {
                 Label("Reveal in Finder", systemImage: "folder")
-            }
-        } else if !store.activeDownloads.contains(episode.videoID) {
-            Button {
-                Task { await store.downloadEpisode(episode) }
-            } label: {
-                Label("Download", systemImage: "arrow.down.circle")
             }
         }
 
         Divider()
 
         Button(role: .destructive) {
-            store.deleteEpisodes([episode.id])
+            store.deleteEpisodes(targetIDs)
+            selectedEpisodeIDs.subtract(targetIDs)
         } label: {
-            Label("Delete", systemImage: "trash")
+            Label(
+                targetIDs.count == 1 ? "Delete Episode" : "Delete Selected Episodes",
+                systemImage: "trash"
+            )
         }
     }
 
@@ -175,11 +132,13 @@ struct EpisodeListView: View {
         return "Episodes"
     }
 
-    private func toggleSelection(for episodeID: UUID) {
-        if selectedEpisodeIDs.contains(episodeID) {
-            selectedEpisodeIDs.remove(episodeID)
-        } else {
-            selectedEpisodeIDs.insert(episodeID)
+    private func contextTargetIDs(for episodeID: UUID) -> Set<UUID> {
+        selectedEpisodeIDs.contains(episodeID) ? selectedEpisodeIDs : [episodeID]
+    }
+
+    private func canDownload(_ episodes: [Episode]) -> Bool {
+        episodes.contains {
+            !$0.isDownloaded && !store.activeDownloads.contains($0.videoID)
         }
     }
 }
@@ -191,20 +150,11 @@ struct EpisodeRow: View {
     let isDownloading: Bool
     let progress: Double?
     let showChannelName: Bool
-    let isSelectionMode: Bool
-    let isSelected: Bool
     @Environment(AppStore.self) private var store
     @State private var isHoveringActionControl = false
 
     var body: some View {
         HStack(spacing: 12) {
-            if isSelectionMode {
-                Image(systemName: isSelected ? "checkmark.circle.fill" : "circle")
-                    .font(.title3)
-                    .foregroundStyle(isSelected ? Color.accentColor : Color.secondary)
-                    .frame(width: 24)
-            }
-
             VStack(alignment: .leading, spacing: 3) {
                 Text(episode.title)
                     .font(.body)
@@ -260,9 +210,6 @@ struct EpisodeRow: View {
             Image(systemName: episode.isPlayed ? "checkmark.circle" : "checkmark.circle.fill")
                 .font(.title3)
                 .foregroundStyle(episode.isPlayed ? Color.secondary : .green)
-        } else if isSelectionMode {
-            Color.clear
-                .frame(width: 22, height: 22)
         } else {
             Button {
                 Task { await store.downloadEpisode(episode) }

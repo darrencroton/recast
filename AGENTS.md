@@ -66,12 +66,14 @@ The repo-root `setup.sh` delegates to `Recast/setup.sh`. The built app bundle is
 
 ### Key Patterns
 - Use `@Observable` macro (not `ObservableObject`) for state
+- Main-thread UI state in `AppStore` should be mutated from `@MainActor` methods
 - Use `actor` for thread-safe I/O and subprocess management
 - Use `async/await` and `Task {}` for concurrency
 - Error types conform to `LocalizedError`
 - Keep episode ordering newest-first unless a feature explicitly calls for a different presentation
 - The `New` filter is "found in the most recent fetch for the current scope", not "all undownloaded episodes"
-- Selection mode and toolbar actions share state across `ContentView` and `EpisodeListView`; update both when changing filter or batch-action behavior
+- Channel and episode multi-selection are shared across `ContentView` and `EpisodeListView`; preserve standard macOS click, Shift-click, and Command-click behavior
+- Toolbar actions are split into global actions (server, QR code, add channel) and selection-scoped actions (refresh, download, delete); keep right-click menus aligned with the same selection rules
 
 ### Running Tests
 

@@ -129,12 +129,14 @@ final class AppStore {
 
     // MARK: - Dependency management
 
+    @MainActor
     func checkDependencies() async {
         ytDlpReady = await downloader.hasYtDlp
         ffmpegReady = await downloader.hasFfmpeg
         AppLogger.info("Dependency check: yt-dlp ready=\(ytDlpReady), ffmpeg ready=\(ffmpegReady)", category: "setup")
     }
 
+    @MainActor
     func installDependencies() async {
         isInstallingDeps = true
         statusMessage = "Installing yt-dlp…"
@@ -162,6 +164,7 @@ final class AppStore {
 
     // MARK: - Channel management
 
+    @MainActor
     func addChannel(url: String) async throws {
         let cleaned = normalizeYouTubeURL(url)
         guard !channels.contains(where: { $0.url == cleaned }) else { return }
@@ -185,9 +188,12 @@ final class AppStore {
 
     // MARK: - Fetch (discover only — no downloads)
 
+    @MainActor
     func fetchNewEpisodes(for channelIDs: Set<UUID>) async {
         guard !isFetching else { return }
         isFetching = true
+        defer { isFetching = false }
+
         let targets = channelIDs.isEmpty ? channels : channels.filter { channelIDs.contains($0.id) }
         let targetChannelIDs = Set(targets.map(\.id))
 
@@ -239,11 +245,11 @@ final class AppStore {
             statusMessage = totalNew > 0 ? "Found \(totalNew) new episode(s)" : "No new episodes"
         }
         AppLogger.info(statusMessage, category: "fetch")
-        isFetching = false
     }
 
     // MARK: - Download
 
+    @MainActor
     func downloadEpisode(_ episode: Episode) async {
         guard !activeDownloads.contains(episode.videoID), !episode.isDownloaded else { return }
         let episodesDir = Paths.episodesDir(in: outputDirectory)
@@ -286,6 +292,7 @@ final class AppStore {
         regenerateFeed()
     }
 
+    @MainActor
     func downloadAllNew(for channelIDs: Set<UUID>) async {
         cancelAllDownloadsRequested = false
         let targets = sortEpisodesNewestFirst(validEpisodes.filter { ep in
@@ -300,6 +307,7 @@ final class AppStore {
         }
     }
 
+    @MainActor
     func downloadEpisodes(_ ids: Set<UUID>) async {
         cancelAllDownloadsRequested = false
         let targets = sortEpisodesNewestFirst(
@@ -317,6 +325,7 @@ final class AppStore {
     }
 
     /// Auto-fetch: discover AND download (background behaviour)
+    @MainActor
     func autoFetch() async {
         await fetchNewEpisodes(for: Set())
         await downloadAllNew(for: Set())

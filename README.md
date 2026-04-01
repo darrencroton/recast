@@ -28,8 +28,8 @@ For day-to-day development, the repo-root `./setup.sh` is the intended entry poi
 ## How It Works
 
 1. **Add channels** — Press `+` and paste a YouTube channel or playlist URL
-2. **Fetch episodes** — Press Fetch to discover new episodes across your channels
-3. **Download what you want** — Download individual episodes, use Select mode for batch actions, or hit Download All
+2. **Refresh channels** — Select one or more channels, then press Refresh to discover new episodes
+3. **Download what you want** — Download individual episodes, or multi-select episodes with standard macOS selection for batch download/delete
 4. **Subscribe** — Start the built-in podcast server and scan the QR code from your phone
 
 ## Subscribe on Your Phone
@@ -47,10 +47,10 @@ You can also manually add the feed URL shown in the status bar or Settings.
 
 ### Core
 - **Channel management** — Add/remove YouTube channels and playlists
-- **Episode discovery** — Fetch lists new episodes without downloading; you choose what to grab
-- **Selective download** — Download individual episodes, selected episodes, or all available episodes
+- **Episode discovery** — Refresh finds new episodes without downloading; you choose what to grab
+- **Selective download** — Download individual episodes or selected episodes
 - **Download progress** — Per-episode progress weighted toward the final MP3 becoming available
-- **Stop controls** — Stop an individual download from the row/context menu or stop all downloads from the toolbar
+- **Stop controls** — Stop an individual download from the row/context menu or stop all active downloads from the toolbar when downloads are running
 - **Podcast feed** — Standard RSS 2.0 with iTunes extensions, compatible with all podcast apps
 - **Built-in server** — HTTP server hosts your feed on the local network
 
@@ -58,7 +58,8 @@ You can also manually add the feed URL shown in the status bar or Settings.
 - **All Episodes view** — See every episode across all channels in one list
 - **Search** — Filter episodes by title across all channels
 - **Episode filters** — Quick-filter by All, Downloaded, New (found in the latest fetch for the current scope), or Unplayed
-- **Selection mode** — Batch-select episodes for download or deletion
+- **Native multi-selection** — Click, Shift-click, and Command-click work like Finder for channels and episodes
+- **Selection-aware actions** — Toolbar and right-click menus expose Refresh, Download, and Delete for the current selection
 - **Played/Unplayed** — Mark episodes to track what you've listened to
 
 ### Automation
@@ -117,8 +118,8 @@ Recast/               macOS SwiftUI app
 │   ├── AppLogger.swift       File-backed app diagnostics
 │   ├── Models.swift          Channel & Episode data models
 │   ├── Store.swift           App state, persistence, business logic
-│   ├── ContentView.swift     Main UI: sidebar, toolbar, QR code, status bar
-│   ├── EpisodeListView.swift Episode list, filters, context menus, progress
+│   ├── ContentView.swift     Main split view, selection-aware toolbar, QR code, status bar
+│   ├── EpisodeListView.swift Episode list, native multi-selection, context menus, progress
 │   ├── AddChannelSheet.swift Add-channel modal
 │   ├── SettingsView.swift    Preferences window
 │   ├── Downloader.swift      yt-dlp/ffmpeg wrapper with progress/cancellation

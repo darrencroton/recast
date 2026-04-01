@@ -8,13 +8,25 @@ enum SidebarItem: Hashable {
     case channel(UUID)
 }
 
+private enum FocusedPane: Hashable {
+    case sidebar
+    case episodes
+}
+
+private enum SelectionActionContext {
+    case none
+    case channels(Set<UUID>)
+    case episodes(Set<UUID>)
+}
+
 struct ContentView: View {
     @Environment(AppStore.self) private var store
     @State private var selection: Set<SidebarItem> = []
+    @State private var selectedEpisodeIDs: Set<UUID> = []
     @State private var showAddSheet = false
     @State private var searchQuery = ""
     @State private var episodeFilter: EpisodeFilter = .all
-    @State private var isEpisodeSelectionMode = false
+    @State private var focusedPane: FocusedPane?
 
     private var selectedChannelIDs: Set<UUID> {
         var ids = Set<UUID>()
@@ -30,6 +42,20 @@ struct ContentView: View {
 
     private var activeChannelScope: Set<UUID> {
         showingAllEpisodes ? Set() : selectedChannelIDs
+    }
+
+    private var visibleEpisodeIDs: Set<UUID> {
+        Set(store.filteredEpisodes(for: activeChannelScope, query: searchQuery, filter: episodeFilter).map(\.id))
+    }
+
+    private var actionableEpisodeIDs: Set<UUID> {
+        selectedEpisodeIDs.intersection(visibleEpisodeIDs)
+    }
+
+    private var selectedVisibleEpisodes: [Episode] {
+        store
+            .filteredEpisodes(for: activeChannelScope, query: searchQuery, filter: episodeFilter)
+            .filter { actionableEpisodeIDs.contains($0.id) }
     }
 
     private var sidebarSummaryTitle: String {
@@ -55,12 +81,61 @@ struct ContentView: View {
         }
     }
 
+    private var selectionContext: SelectionActionContext {
+        switch focusedPane {
+        case .sidebar:
+            return selectedChannelIDs.isEmpty ? .none : .channels(selectedChannelIDs)
+        case .episodes:
+            if !actionableEpisodeIDs.isEmpty {
+                return .episodes(actionableEpisodeIDs)
+            }
+            return selectedChannelIDs.isEmpty ? .none : .channels(selectedChannelIDs)
+        case nil:
+            if !actionableEpisodeIDs.isEmpty {
+                return .episodes(actionableEpisodeIDs)
+            }
+            if !selectedChannelIDs.isEmpty {
+                return .channels(selectedChannelIDs)
+            }
+            return .none
+        }
+    }
+
+    private var canRefreshSelectedChannels: Bool {
+        guard case .channels(let ids) = selectionContext else { return false }
+        return !ids.isEmpty && !store.isFetching
+    }
+
+    private var isRefreshingSelectedChannels: Bool {
+        guard case .channels(let ids) = selectionContext else { return false }
+        return !ids.isEmpty && store.isFetching
+    }
+
+    private var canDeleteSelectedItems: Bool {
+        switch selectionContext {
+        case .channels(let ids), .episodes(let ids):
+            return !ids.isEmpty
+        case .none:
+            return false
+        }
+    }
+
+    private var canDownloadSelectedEpisodes: Bool {
+        guard case .episodes = selectionContext else { return false }
+        return selectedVisibleEpisodes.contains {
+            !$0.isDownloaded && !store.activeDownloads.contains($0.videoID)
+        }
+    }
+
     var body: some View {
         if !store.ytDlpReady || !store.ffmpegReady {
             SetupView()
         } else {
             mainContent
-                .onAppear { store.onLaunch() }
+                .onAppear {
+                    store.onLaunch()
+                    ensureDefaultSidebarSelection()
+                }
         }
     }
 
@@ -73,16 +148,21 @@ struct ContentView: View {
         }
         .searchable(text: $searchQuery, prompt: "Search episodes")
         .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                serverToggle
-                qrCodeButton
-                fetchButton
-                if store.hasActiveDownloads {
-                    stopAllDownloadsButton
-                } else {
-                    downloadAllButton
+            ToolbarItem(placement: .automatic) {
+                if !store.channels.isEmpty {
+                    Picker("Filter", selection: $episodeFilter) {
+                        ForEach(EpisodeFilter.allCases, id: \.self) { filter in
+                            Text(filter.rawValue).tag(filter)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .help("Filter episodes")
                 }
-                addButton
+            }
+
+            ToolbarItemGroup(placement: .primaryAction) {
+                globalActions
+                selectionActions
             }
         }
         .safeAreaInset(edge: .bottom, spacing: 0) {
@@ -90,6 +170,18 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showAddSheet) {
             AddChannelSheet()
+        }
+        .onChange(of: store.channels.count) { _, newCount in
+            if newCount == 0 {
+                selection.removeAll()
+                selectedEpisodeIDs.removeAll()
+                focusedPane = nil
+            } else {
+                ensureDefaultSidebarSelection()
+            }
+        }
+        .onChange(of: visibleEpisodeIDs) { _, newValue in
+            selectedEpisodeIDs.formIntersection(newValue)
         }
     }
 
@@ -114,22 +206,23 @@ struct ContentView: View {
                         ChannelRow(channel: channel, episodeCount: store.episodes(for: channel.id).count)
                             .tag(SidebarItem.channel(channel.id))
                             .contextMenu {
-                                Button("Remove", role: .destructive) {
-                                    withAnimation {
-                                        store.removeChannels([channel.id])
-                                        selection.remove(.channel(channel.id))
-                                    }
-                                }
+                                channelContextMenu(for: channel.id)
                             }
                     }
                 }
             }
         }
         .listStyle(.sidebar)
+        .simultaneousGesture(TapGesture().onEnded {
+            focusedPane = .sidebar
+        })
         .navigationTitle("Channels")
         .onChange(of: selection) { old, new in
             enforceExclusiveSelection(old: old, new: new)
-            isEpisodeSelectionMode = false
+            if selection != old {
+                selectedEpisodeIDs.removeAll()
+                focusedPane = .sidebar
+            }
         }
     }
 
@@ -148,7 +241,10 @@ struct ContentView: View {
                     channelIDs: showingAllEpisodes ? Set() : selectedChannelIDs,
                     searchQuery: searchQuery,
                     filterMode: $episodeFilter,
-                    isSelectionMode: $isEpisodeSelectionMode
+                    selectedEpisodeIDs: $selectedEpisodeIDs,
+                    onActivateSelection: {
+                        focusedPane = .episodes
+                    }
                 )
             } else {
                 ContentUnavailableView {
@@ -162,6 +258,22 @@ struct ContentView: View {
 
     // MARK: - Toolbar items
 
+    private var globalActions: some View {
+        ControlGroup {
+            serverToggle
+            qrCodeButton
+            addButton
+        }
+    }
+
+    private var selectionActions: some View {
+        ControlGroup {
+            refreshSelectionButton
+            downloadSelectionButton
+            deleteSelectionButton
+        }
+    }
+
     private var addButton: some View {
         Button {
             showAddSheet = true
@@ -171,42 +283,39 @@ struct ContentView: View {
         .help("Add a YouTube channel")
     }
 
-    private var fetchButton: some View {
+    private var refreshSelectionButton: some View {
         Button {
-            Task {
-                await store.fetchNewEpisodes(for: selectedChannelIDs)
-            }
+            refreshChannelsFromToolbar()
         } label: {
-            if store.isFetching {
+            if isRefreshingSelectedChannels {
                 ProgressView()
                     .controlSize(.small)
             } else {
-                Label("Fetch", systemImage: "arrow.clockwise")
+                Label("Refresh", systemImage: "arrow.clockwise")
             }
         }
-        .disabled(store.channels.isEmpty || store.isFetching)
-        .help(selectedChannelIDs.isEmpty ? "Check all channels for new episodes" : "Check selected channels for new episodes")
+        .disabled(!canRefreshSelectedChannels)
+        .help("Refresh the selected channels")
     }
 
-    private var downloadAllButton: some View {
+    private var downloadSelectionButton: some View {
         Button {
-            Task {
-                await store.downloadAllNew(for: showingAllEpisodes ? Set() : selectedChannelIDs)
-            }
+            downloadSelectedEpisodes()
         } label: {
-            Label("Download All", systemImage: "arrow.down.to.line")
+            Label("Download", systemImage: "arrow.down.circle")
         }
-        .disabled(store.channels.isEmpty || store.hasActiveDownloads || isEpisodeSelectionMode)
-        .help("Download all undownloaded episodes")
+        .disabled(!canDownloadSelectedEpisodes)
+        .help("Download the selected episodes")
     }
 
-    private var stopAllDownloadsButton: some View {
+    private var deleteSelectionButton: some View {
         Button(role: .destructive) {
-            store.stopAllDownloads()
+            deleteSelection()
         } label: {
-            Label("Stop All Downloads", systemImage: "stop.circle")
+            Label("Delete", systemImage: "trash")
         }
-        .help("Stop all active downloads")
+        .disabled(!canDeleteSelectedItems)
+        .help(deleteButtonHelpText)
     }
 
     private var serverToggle: some View {
@@ -240,6 +349,101 @@ struct ContentView: View {
         .help("Show feed QR code for your phone")
         .popover(isPresented: $showQRPopover) {
             QRCodePopover(feedURL: store.feedURL)
+        }
+    }
+
+    // MARK: - Selection actions
+
+    private var deleteButtonHelpText: String {
+        switch selectionContext {
+        case .channels:
+            return "Delete the selected channels"
+        case .episodes:
+            return "Delete the selected episodes"
+        case .none:
+            return "Delete the selected item"
+        }
+    }
+
+    private func ensureDefaultSidebarSelection() {
+        guard !store.channels.isEmpty, selection.isEmpty else { return }
+        selection = [.allEpisodes]
+    }
+
+    private func refreshChannelsFromToolbar() {
+        guard case .channels(let ids) = selectionContext else { return }
+        refreshChannels(ids)
+    }
+
+    private func downloadSelectedEpisodes() {
+        guard case .episodes(let ids) = selectionContext else { return }
+        Task {
+            await store.downloadEpisodes(ids)
+        }
+    }
+
+    private func deleteSelection() {
+        switch selectionContext {
+        case .channels(let ids):
+            deleteChannels(ids)
+        case .episodes(let ids):
+            deleteEpisodes(ids)
+        case .none:
+            break
+        }
+    }
+
+    private func refreshChannels(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        Task {
+            await store.fetchNewEpisodes(for: ids)
+        }
+    }
+
+    private func deleteChannels(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        withAnimation {
+            store.removeChannels(ids)
+            selection.subtract(ids.map { SidebarItem.channel($0) })
+            if selection.isEmpty, !store.channels.isEmpty {
+                selection = [.allEpisodes]
+            }
+        }
+        selectedEpisodeIDs.removeAll()
+        focusedPane = .sidebar
+    }
+
+    private func deleteEpisodes(_ ids: Set<UUID>) {
+        guard !ids.isEmpty else { return }
+        store.deleteEpisodes(ids)
+        selectedEpisodeIDs.subtract(ids)
+    }
+
+    private func channelContextTarget(for channelID: UUID) -> Set<UUID> {
+        selectedChannelIDs.contains(channelID) ? selectedChannelIDs : [channelID]
+    }
+
+    @ViewBuilder
+    private func channelContextMenu(for channelID: UUID) -> some View {
+        let targetIDs = channelContextTarget(for: channelID)
+
+        Button {
+            refreshChannels(targetIDs)
+        } label: {
+            Label(
+                targetIDs.count == 1 ? "Refresh Channel" : "Refresh Selected Channels",
+                systemImage: "arrow.clockwise"
+            )
+        }
+        .disabled(store.isFetching)
+
+        Button(role: .destructive) {
+            deleteChannels(targetIDs)
+        } label: {
+            Label(
+                targetIDs.count == 1 ? "Delete Channel" : "Delete Selected Channels",
+                systemImage: "trash"
+            )
         }
     }
 
