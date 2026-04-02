@@ -2,6 +2,15 @@ import Foundation
 import Network
 
 final class PodcastServer {
+    private struct ByteRange {
+        let start: UInt64
+        let end: UInt64
+
+        var length: UInt64 {
+            end - start + 1
+        }
+    }
+
     private var listener: NWListener?
     private let port: UInt16
     private let rootDir: URL
@@ -53,16 +62,32 @@ final class PodcastServer {
         let lines = request.components(separatedBy: "\r\n")
         guard let first = lines.first else { conn.cancel(); return }
         let tokens = first.split(separator: " ")
-        guard tokens.count >= 2, tokens[0] == "GET" else {
+        guard tokens.count >= 2 else {
             sendResponse(conn, status: "405 Method Not Allowed", body: Data())
             return
         }
 
-        var path = String(tokens[1])
+        let method = String(tokens[0]).uppercased()
+        guard method == "GET" || method == "HEAD" else {
+            sendResponse(conn, status: "405 Method Not Allowed", body: Data())
+            return
+        }
+
+        var path = String(tokens[1].split(separator: "?", maxSplits: 1).first ?? "")
         if path == "/" { path = "/feed.xml" }
+        let decodedPath = path.removingPercentEncoding ?? path
+
+        var requestHeaders: [String: String] = [:]
+        for line in lines.dropFirst() where !line.isEmpty {
+            let parts = line.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2 else { continue }
+            let name = parts[0].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let value = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+            requestHeaders[name] = value
+        }
 
         // Security: prevent directory traversal
-        let resolved = rootDir.appendingPathComponent(path).standardized
+        let resolved = rootDir.appendingPathComponent(decodedPath).standardized
         guard resolved.path.hasPrefix(rootDir.standardized.path) else {
             sendResponse(conn, status: "403 Forbidden", body: Data())
             return
@@ -74,19 +99,65 @@ final class PodcastServer {
             return
         }
 
-        let fileSize = (try? FileManager.default.attributesOfItem(atPath: resolved.path)[.size] as? Int) ?? 0
+        let fileSize = (try? FileManager.default.attributesOfItem(atPath: resolved.path)[.size] as? NSNumber)?.uint64Value ?? 0
         let contentType = mimeType(for: resolved.pathExtension)
+        let range = parseRangeHeader(requestHeaders["range"], fileSize: fileSize)
 
-        let header = "HTTP/1.1 200 OK\r\nContent-Type: \(contentType)\r\nContent-Length: \(fileSize)\r\nAccess-Control-Allow-Origin: *\r\nConnection: close\r\n\r\n"
-        let headerData = header.data(using: .utf8)!
+        if requestHeaders["range"] != nil && range == nil {
+            sendResponse(
+                conn,
+                status: "416 Range Not Satisfiable",
+                headers: ["Content-Range": "bytes */\(fileSize)", "Accept-Ranges": "bytes"],
+                body: Data()
+            )
+            try? handle.close()
+            return
+        }
+
+        let responseRange = range ?? ByteRange(start: 0, end: fileSize == 0 ? 0 : fileSize - 1)
+        let responseLength = range?.length ?? fileSize
+        let status = range == nil ? "200 OK" : "206 Partial Content"
+        let responseHeaders = responseHeaders(
+            contentType: contentType,
+            fileSize: fileSize,
+            range: responseRange,
+            contentLength: responseLength,
+            status: status
+        )
+
+        if responseRange.start > 0 {
+            try? handle.seek(toOffset: responseRange.start)
+        }
+
+        guard let headerData = responseHeaderData(status: status, headers: responseHeaders) else {
+            sendResponse(conn, status: "500 Internal Server Error", body: Data())
+            try? handle.close()
+            return
+        }
 
         conn.send(content: headerData, completion: .contentProcessed { [weak self] _ in
-            self?.sendFileChunks(handle: handle, on: conn)
+            guard method == "GET" else {
+                try? handle.close()
+                conn.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in
+                    conn.cancel()
+                })
+                return
+            }
+            self?.sendFileChunks(handle: handle, on: conn, remainingBytes: responseLength)
         })
     }
 
-    private func sendFileChunks(handle: FileHandle, on conn: NWConnection, chunkSize: Int = 65536) {
-        let chunk = handle.readData(ofLength: chunkSize)
+    private func sendFileChunks(handle: FileHandle, on conn: NWConnection, remainingBytes: UInt64, chunkSize: Int = 65536) {
+        guard remainingBytes > 0 else {
+            try? handle.close()
+            conn.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in
+                conn.cancel()
+            })
+            return
+        }
+
+        let readSize = Int(min(remainingBytes, UInt64(chunkSize)))
+        let chunk = handle.readData(ofLength: readSize)
         if chunk.isEmpty {
             try? handle.close()
             conn.send(content: nil, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in
@@ -95,17 +166,78 @@ final class PodcastServer {
             return
         }
         conn.send(content: chunk, completion: .contentProcessed { [weak self] _ in
-            self?.sendFileChunks(handle: handle, on: conn)
+            self?.sendFileChunks(
+                handle: handle,
+                on: conn,
+                remainingBytes: remainingBytes - UInt64(chunk.count),
+                chunkSize: chunkSize
+            )
         })
     }
 
-    private func sendResponse(_ conn: NWConnection, status: String, body: Data) {
-        let header = "HTTP/1.1 \(status)\r\nContent-Length: \(body.count)\r\nConnection: close\r\n\r\n"
-        var data = header.data(using: .utf8)!
+    private func sendResponse(_ conn: NWConnection, status: String, headers: [String: String] = [:], body: Data) {
+        var responseHeaders = headers
+        responseHeaders["Content-Length"] = String(body.count)
+        guard var data = responseHeaderData(status: status, headers: responseHeaders) else {
+            conn.cancel()
+            return
+        }
         data.append(body)
         conn.send(content: data, contentContext: .finalMessage, isComplete: true, completion: .contentProcessed { _ in
             conn.cancel()
         })
+    }
+
+    private func responseHeaders(contentType: String, fileSize: UInt64, range: ByteRange, contentLength: UInt64, status: String) -> [String: String] {
+        var headers: [String: String] = [
+            "Content-Type": contentType,
+            "Content-Length": String(contentLength),
+            "Access-Control-Allow-Origin": "*",
+            "Accept-Ranges": "bytes"
+        ]
+        if status == "206 Partial Content" {
+            headers["Content-Range"] = "bytes \(range.start)-\(range.end)/\(fileSize)"
+        }
+        return headers
+    }
+
+    private func responseHeaderData(status: String, headers: [String: String]) -> Data? {
+        var header = "HTTP/1.1 \(status)\r\n"
+        for key in headers.keys.sorted() {
+            guard let value = headers[key] else { continue }
+            header += "\(key): \(value)\r\n"
+        }
+        header += "Connection: close\r\n\r\n"
+        return header.data(using: .utf8)
+    }
+
+    private func parseRangeHeader(_ value: String?, fileSize: UInt64) -> ByteRange? {
+        guard let value, fileSize > 0 else { return nil }
+        guard value.lowercased().hasPrefix("bytes=") else { return nil }
+
+        let spec = value.dropFirst("bytes=".count)
+        guard !spec.contains(",") else { return nil }
+
+        let parts = spec.split(separator: "-", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2 else { return nil }
+
+        let lower = String(parts[0])
+        let upper = String(parts[1])
+
+        if lower.isEmpty {
+            guard let suffixLength = UInt64(upper), suffixLength > 0 else { return nil }
+            let length = min(suffixLength, fileSize)
+            return ByteRange(start: fileSize - length, end: fileSize - 1)
+        }
+
+        guard let start = UInt64(lower), start < fileSize else { return nil }
+
+        if upper.isEmpty {
+            return ByteRange(start: start, end: fileSize - 1)
+        }
+
+        guard let end = UInt64(upper), end >= start else { return nil }
+        return ByteRange(start: start, end: min(end, fileSize - 1))
     }
 
     private func mimeType(for ext: String) -> String {
