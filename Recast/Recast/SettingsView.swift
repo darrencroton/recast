@@ -97,12 +97,13 @@ struct SettingsView: View {
                     }
                 }
 
-                serverSettingsRow("Feed URL") {
+                serverSettingsRow("Feed URL", usesFlexibleContentWidth: true) {
                     Text(store.feedURL)
                         .font(.callout.monospaced())
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .truncationMode(.middle)
+                        .minimumScaleFactor(0.9)
                         .textSelection(.enabled)
                 }
             }
@@ -207,14 +208,20 @@ struct SettingsView: View {
 
     private func serverSettingsRow<Content: View>(
         _ title: String,
+        usesFlexibleContentWidth: Bool = false,
         @ViewBuilder content: () -> Content
     ) -> some View {
         HStack(alignment: .top, spacing: 12) {
             Text(title)
                 .frame(width: serverLabelWidth, alignment: .leading)
             Spacer(minLength: 0)
-            content()
-                .frame(width: serverContentWidth, alignment: .trailing)
+            if usesFlexibleContentWidth {
+                content()
+                    .frame(maxWidth: .infinity, alignment: .trailing)
+            } else {
+                content()
+                    .frame(width: serverContentWidth, alignment: .trailing)
+            }
         }
     }
 
