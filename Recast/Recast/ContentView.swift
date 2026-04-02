@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 import CoreImage.CIFilterBuiltins
 
@@ -142,7 +143,6 @@ struct ContentView: View {
             mainContent
                 .onAppear {
                     store.onLaunch()
-                    ensureDefaultSidebarSelection()
                 }
         }
     }
@@ -186,8 +186,6 @@ struct ContentView: View {
                 selection.removeAll()
                 selectedEpisodeIDs.removeAll()
                 focusedPane = nil
-            } else {
-                ensureDefaultSidebarSelection()
             }
         }
         .onChange(of: visibleEpisodeIDs) { _, newValue in
@@ -227,6 +225,9 @@ struct ContentView: View {
             }
         }
         .listStyle(.sidebar)
+        .background {
+            SidebarEmptySpaceDeselectionBridge(selection: $selection)
+        }
         .simultaneousGesture(TapGesture().onEnded {
             focusedPane = .sidebar
         })
@@ -255,9 +256,9 @@ struct ContentView: View {
                     } description: {
                         Text("Add a YouTube channel, playlist, or episode to begin downloading audio.")
                     }
-                } else if showingAllEpisodes || !selectedChannelIDs.isEmpty {
+                } else {
                     EpisodeListView(
-                        channelIDs: showingAllEpisodes ? Set() : selectedChannelIDs,
+                        channelIDs: activeChannelScope,
                         searchQuery: searchQuery,
                         filterMode: $episodeFilter,
                         selectedEpisodeIDs: $selectedEpisodeIDs,
@@ -265,12 +266,6 @@ struct ContentView: View {
                             focusedPane = .episodes
                         }
                     )
-                } else {
-                    ContentUnavailableView {
-                        Label("Select a Source", systemImage: "sidebar.left")
-                    } description: {
-                        Text("Choose a source from the sidebar, or select All Episodes.")
-                    }
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -416,11 +411,6 @@ struct ContentView: View {
         }
     }
 
-    private func ensureDefaultSidebarSelection() {
-        guard !store.channels.isEmpty, selection.isEmpty else { return }
-        selection = [.allEpisodes]
-    }
-
     private func refreshChannelsFromToolbar() {
         guard case .channels(let ids) = selectionContext else { return }
         refreshChannels(ids)
@@ -481,9 +471,6 @@ struct ContentView: View {
         withAnimation {
             store.removeChannels(ids)
             selection.subtract(ids.map { SidebarItem.channel($0) })
-            if selection.isEmpty, !store.channels.isEmpty {
-                selection = [.allEpisodes]
-            }
         }
         selectedEpisodeIDs.removeAll()
         focusedPane = .sidebar
@@ -623,6 +610,145 @@ struct ContentView: View {
         .overlay(alignment: .bottom) {
             Divider()
         }
+    }
+}
+
+private struct SidebarEmptySpaceDeselectionBridge: NSViewRepresentable {
+    @Binding var selection: Set<SidebarItem>
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(selection: $selection)
+    }
+
+    func makeNSView(context: Context) -> SidebarSelectionMonitorView {
+        let view = SidebarSelectionMonitorView()
+        view.coordinator = context.coordinator
+        return view
+    }
+
+    func updateNSView(_ nsView: SidebarSelectionMonitorView, context: Context) {
+        context.coordinator.selection = $selection
+        nsView.coordinator = context.coordinator
+        nsView.configureIfNeeded()
+    }
+
+    final class Coordinator {
+        var selection: Binding<Set<SidebarItem>>
+
+        init(selection: Binding<Set<SidebarItem>>) {
+            self.selection = selection
+        }
+
+        func clearSelection() {
+            guard !selection.wrappedValue.isEmpty else { return }
+            selection.wrappedValue.removeAll()
+        }
+    }
+}
+
+private final class SidebarSelectionMonitorView: NSView {
+    weak var tableView: NSTableView?
+    var coordinator: SidebarEmptySpaceDeselectionBridge.Coordinator?
+    private var monitor: Any?
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        installMonitorIfNeeded()
+        configureIfNeeded()
+    }
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        super.viewWillMove(toWindow: newWindow)
+        if newWindow !== window {
+            removeMonitor()
+            tableView = nil
+        }
+    }
+
+    override func viewDidMoveToSuperview() {
+        super.viewDidMoveToSuperview()
+        configureIfNeeded()
+    }
+
+    deinit {
+        removeMonitor()
+    }
+
+    func configureIfNeeded() {
+        guard let tableView = resolveTableView() else { return }
+        tableView.allowsEmptySelection = true
+        self.tableView = tableView
+    }
+
+    private func installMonitorIfNeeded() {
+        guard monitor == nil else { return }
+
+        monitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
+            self?.handleMouseDown(event) ?? event
+        }
+    }
+
+    private func removeMonitor() {
+        if let monitor {
+            NSEvent.removeMonitor(monitor)
+            self.monitor = nil
+        }
+    }
+
+    private func handleMouseDown(_ event: NSEvent) -> NSEvent? {
+        guard let window, event.window === window else { return event }
+        guard let tableView = resolveTableView() else { return event }
+
+        let pointInTable = tableView.convert(event.locationInWindow, from: nil)
+        guard tableView.bounds.contains(pointInTable) else { return event }
+        guard tableView.row(at: pointInTable) == -1 else { return event }
+
+        tableView.deselectAll(nil)
+        coordinator?.clearSelection()
+        return event
+    }
+
+    private func resolveTableView() -> NSTableView? {
+        let referencePoint = convert(
+            NSPoint(x: bounds.midX, y: bounds.midY),
+            to: nil
+        )
+
+        if let tableView, tableView.window === window {
+            let pointInTable = tableView.convert(referencePoint, from: nil)
+            if tableView.bounds.contains(pointInTable) {
+                return tableView
+            }
+        }
+
+        var ancestor: NSView? = self
+        while let view = ancestor {
+            if let tableView = view.firstDescendant(of: NSTableView.self, containing: referencePoint) {
+                return tableView
+            }
+            ancestor = view.superview
+        }
+
+        return nil
+    }
+}
+
+private extension NSView {
+    func firstDescendant<T: NSView>(of type: T.Type, containing windowPoint: NSPoint) -> T? {
+        if let selfAsType = self as? T {
+            let pointInSelf = selfAsType.convert(windowPoint, from: nil)
+            if selfAsType.bounds.contains(pointInSelf) {
+                return selfAsType
+            }
+        }
+
+        for subview in subviews {
+            if let match = subview.firstDescendant(of: type, containing: windowPoint) {
+                return match
+            }
+        }
+
+        return nil
     }
 }
 
