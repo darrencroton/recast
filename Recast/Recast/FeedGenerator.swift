@@ -18,7 +18,7 @@ enum FeedGenerator {
             let channelName = channels.first(where: { $0.id == ep.channelID })?.name ?? "Unknown"
             let artworkURL = Paths.artworkURL(forEpisodeFileName: fileName, in: outputDir)
             let artworkElement = if FileManager.default.fileExists(atPath: artworkURL.path) {
-                "\n                  <itunes:image href=\"\(xmlEscape(resourceURL(baseURL: baseURL, relativePath: Episode.artworkFileName(forEpisodeFileName: fileName))))\"/>"
+                "\n                  <itunes:image href=\"\(xmlEscape(feedAssetURL(baseURL: baseURL, fileName: Paths.feedArtworkFileName(forVideoID: ep.videoID))))\"/>"
             } else {
                 ""
             }
@@ -28,7 +28,7 @@ enum FeedGenerator {
                 <item>
                   <title>\(xmlEscape(ep.title))</title>
                   <description>\(xmlEscape("From \(channelName). Watch: https://www.youtube.com/watch?v=\(ep.videoID)"))</description>
-                  <enclosure url="\(xmlEscape(resourceURL(baseURL: baseURL, relativePath: fileName)))" length="\(fileSize)" type="audio/mpeg"/>
+                  <enclosure url="\(xmlEscape(feedAssetURL(baseURL: baseURL, fileName: Paths.feedAudioFileName(forVideoID: ep.videoID))))" length="\(fileSize)" type="audio/mpeg"/>
                   <guid isPermaLink="false">\(ep.videoID)</guid>
                   <pubDate>\(rfc2822(ep.publishDate))</pubDate>
                   <itunes:duration>\(formatDuration(ep.durationSeconds))</itunes:duration>
@@ -112,14 +112,14 @@ enum FeedGenerator {
         """
     }
 
-    private static func resourceURL(baseURL: String, relativePath: String) -> String {
+    private static func feedAssetURL(baseURL: String, fileName: String) -> String {
         guard let base = URL(string: baseURL) else {
-            return "\(baseURL)/episodes/\(relativePath)"
+            return "\(baseURL)/\(Paths.feedAssetsDirectoryName)/\(fileName)"
         }
 
         return base
-            .appendingPathComponent("episodes", isDirectory: true)
-            .appendingPathComponent(relativePath)
+            .appendingPathComponent(Paths.feedAssetsDirectoryName, isDirectory: true)
+            .appendingPathComponent(fileName)
             .absoluteString
     }
 

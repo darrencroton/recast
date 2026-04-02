@@ -625,7 +625,9 @@ final class AppStore {
     func regenerateFeed() {
         let baseURL = serverBaseURL
         let downloaded = sortEpisodesNewestFirst(validEpisodes.filter(\.isDownloaded))
+        normalizeDownloadedEpisodeArtwork(downloaded)
         ShowArtwork.ensureExists(in: outputDirectory)
+        FeedAssetLinks.sync(downloadedEpisodes: downloaded, in: outputDirectory)
         AppLogger.info("Regenerating feed with \(downloaded.count) downloaded episode(s) at \(baseURL)", category: "feed")
         FeedGenerator.write(
             episodes: downloaded,
@@ -1080,6 +1082,16 @@ final class AppStore {
             try? fileManager.removeItem(at: feedFile)
         }
 
+        let showArtworkURL = Paths.showArtworkURL(in: outputDirectory)
+        if fileManager.fileExists(atPath: showArtworkURL.path) {
+            try? fileManager.removeItem(at: showArtworkURL)
+        }
+
+        let feedAssetsDir = Paths.feedAssetsDirectoryURL(in: outputDirectory)
+        if fileManager.fileExists(atPath: feedAssetsDir.path) {
+            try? fileManager.removeItem(at: feedAssetsDir)
+        }
+
         removeManagedEpisodeArtifacts(for: episodes, channels: channels, in: outputDirectory)
         removeManagedEpisodesDirectoryIfEmptyAndOwned(at: episodesDir)
     }
@@ -1190,6 +1202,15 @@ final class AppStore {
         return content.contains("<title>Recast</title>")
             && content.contains("<itunes:author>Recast</itunes:author>")
             && content.contains("<language>en</language>")
+    }
+
+    private func normalizeDownloadedEpisodeArtwork(_ downloadedEpisodes: [Episode]) {
+        for episode in downloadedEpisodes {
+            guard let fileName = episode.fileName else { continue }
+            let artworkURL = Paths.artworkURL(forEpisodeFileName: fileName, in: outputDirectory)
+            guard FileManager.default.fileExists(atPath: artworkURL.path) else { continue }
+            EpisodeArtwork.ensurePodcastReady(at: artworkURL)
+        }
     }
 
     private func removeManagedAppSupportArtifacts(removeStateFile: Bool) {

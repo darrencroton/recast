@@ -89,6 +89,30 @@ final class PodcastServerTests: XCTestCase {
         XCTAssertEqual(http.value(forHTTPHeaderField: "Accept-Ranges"), "bytes")
     }
 
+    func test_headReturnsActualContentLengthForFeedAssetHardLink() async throws {
+        let sourceURL = tempDir
+            .appendingPathComponent("episodes", isDirectory: true)
+            .appendingPathComponent("episode.jpg")
+        try FileManager.default.createDirectory(at: sourceURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let body = Data(repeating: 0xAB, count: 4096)
+        try body.write(to: sourceURL)
+
+        let feedAssetsDir = tempDir.appendingPathComponent(Paths.feedAssetsDirectoryName, isDirectory: true)
+        try FileManager.default.createDirectory(at: feedAssetsDir, withIntermediateDirectories: true)
+        let aliasURL = feedAssetsDir.appendingPathComponent("episode.jpg")
+        try FileManager.default.linkItem(at: sourceURL, to: aliasURL)
+
+        let port = try startServer()
+        var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/\(Paths.feedAssetsDirectoryName)/episode.jpg")!)
+        request.httpMethod = "HEAD"
+
+        let (data, response) = try await session.data(for: request)
+        let http = try XCTUnwrap(response as? HTTPURLResponse)
+        XCTAssertEqual(http.statusCode, 200)
+        XCTAssertEqual(data.count, 0)
+        XCTAssertEqual(http.value(forHTTPHeaderField: "Content-Length"), String(body.count))
+    }
+
     private func startServer() throws -> UInt16 {
         let port = try availablePort()
         let server = PodcastServer(port: port, rootDir: tempDir)

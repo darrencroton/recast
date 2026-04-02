@@ -202,7 +202,7 @@ final class FeedGeneratorTests: XCTestCase {
         let channel = makeChannel()
         let ep = makeEpisode(channelID: channel.id, videoID: "vid003", title: "Test", fileName: "vid003.mp3")
         FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:9999", to: tempDir)
-        XCTAssertTrue(try feedContent().contains("http://localhost:9999/episodes/vid003.mp3"))
+        XCTAssertTrue(try feedContent().contains("http://localhost:9999/feed-assets/vid003.mp3"))
     }
 
     func test_write_enclosureURLIncludesChannelSubfolder() throws {
@@ -215,10 +215,7 @@ final class FeedGeneratorTests: XCTestCase {
 
         FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:9999", to: tempDir)
 
-        let expectedURL = URL(string: "http://localhost:9999")!
-            .appendingPathComponent("episodes", isDirectory: true)
-            .appendingPathComponent(relativePath)
-            .absoluteString
+        let expectedURL = "http://localhost:9999/feed-assets/vid003.mp3"
         XCTAssertTrue(try feedContent().contains(expectedURL))
     }
 
@@ -245,7 +242,7 @@ final class FeedGeneratorTests: XCTestCase {
 
         FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
 
-        XCTAssertTrue(try feedContent().contains("<itunes:image href=\"http://localhost:8888/episodes/art001.jpg\"/>"))
+        XCTAssertTrue(try feedContent().contains("<itunes:image href=\"http://localhost:8888/feed-assets/art001.jpg\"/>"))
     }
 
     func test_write_includesItemArtworkWhenSidecarExistsInChannelFolder() throws {
@@ -258,10 +255,7 @@ final class FeedGeneratorTests: XCTestCase {
 
         FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
 
-        let expectedURL = URL(string: "http://localhost:8888")!
-            .appendingPathComponent("episodes", isDirectory: true)
-            .appendingPathComponent(Episode.artworkFileName(forEpisodeFileName: relativePath))
-            .absoluteString
+        let expectedURL = "http://localhost:8888/feed-assets/art001.jpg"
         XCTAssertTrue(try feedContent().contains("<itunes:image href=\"\(expectedURL)\"/>"))
     }
 

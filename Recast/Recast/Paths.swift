@@ -4,6 +4,7 @@ enum Paths {
     private static let fm = FileManager.default
     static let managedEpisodesMarkerFileName = ".recast-owned"
     static let showArtworkFileName = "show-cover.jpg"
+    static let feedAssetsDirectoryName = "feed-assets"
 
     static var appSupport: URL {
         let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -100,6 +101,32 @@ enum Paths {
 
     static func showArtworkURL(in outputDir: URL) -> URL {
         outputDir.appendingPathComponent(showArtworkFileName)
+    }
+
+    static func feedAssetsDirectoryURL(in outputDir: URL) -> URL {
+        outputDir.appendingPathComponent(feedAssetsDirectoryName, isDirectory: true)
+    }
+
+    static func ensureFeedAssetsDirectory(in outputDir: URL) -> URL {
+        let dir = feedAssetsDirectoryURL(in: outputDir)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    static func feedAudioFileName(forVideoID videoID: String) -> String {
+        "\(videoID).mp3"
+    }
+
+    static func feedArtworkFileName(forVideoID videoID: String) -> String {
+        "\(videoID).jpg"
+    }
+
+    static func feedAudioURL(forVideoID videoID: String, in outputDir: URL) -> URL {
+        feedAssetsDirectoryURL(in: outputDir).appendingPathComponent(feedAudioFileName(forVideoID: videoID))
+    }
+
+    static func feedArtworkURL(forVideoID videoID: String, in outputDir: URL) -> URL {
+        feedAssetsDirectoryURL(in: outputDir).appendingPathComponent(feedArtworkFileName(forVideoID: videoID))
     }
 
     static var ytDlpInBin: URL {

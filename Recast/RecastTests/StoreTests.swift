@@ -1,3 +1,4 @@
+import AppKit
 import XCTest
 @testable import Recast
 
@@ -64,6 +65,40 @@ final class StoreTests: XCTestCase {
         )
         try Data("audio".utf8).write(to: fileURL)
         return fileURL
+    }
+
+    private func createArtworkFile(named relativePath: String, width: Int, height: Int) throws -> URL {
+        let artworkURL = Paths.artworkURL(forEpisodeFileName: relativePath, in: store.outputDirectory)
+        try FileManager.default.createDirectory(
+            at: artworkURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+
+        let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: width,
+            pixelsHigh: height,
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        )!
+        bitmap.size = NSSize(width: width, height: height)
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+        NSColor.systemTeal.setFill()
+        NSBezierPath(rect: NSRect(x: 0, y: 0, width: width, height: height)).fill()
+        NSColor.white.setFill()
+        NSBezierPath(rect: NSRect(x: width / 4, y: height / 4, width: width / 2, height: height / 2)).fill()
+        NSGraphicsContext.restoreGraphicsState()
+
+        let data = try XCTUnwrap(bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.9]))
+        try data.write(to: artworkURL)
+        return artworkURL
     }
 
     // MARK: - normalizeYouTubeURL: mobile → desktop
@@ -248,6 +283,51 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: Paths.showArtworkURL(in: tempDir).path))
     }
 
+    func test_regenerateFeed_normalizesEpisodeArtworkToSquarePodcastDimensions() throws {
+        let channel = makeChannel(name: "Science Weekly")
+        let relativePath = Paths.relativeEpisodePath(forFileName: "episode.mp3", in: channel)
+        _ = try createDownloadedEpisodeFile(named: relativePath)
+        let artworkURL = try createArtworkFile(named: relativePath, width: 1280, height: 720)
+        let episode = makeEpisode(channelID: channel.id, videoID: "episode", fileName: relativePath)
+        store.channels = [channel]
+        store.episodes = [episode]
+
+        store.regenerateFeed()
+
+        let artworkData = try Data(contentsOf: artworkURL)
+        let representation = try XCTUnwrap(NSBitmapImageRep(data: artworkData))
+        XCTAssertEqual(representation.pixelsWide, 1400)
+        XCTAssertEqual(representation.pixelsHigh, 1400)
+    }
+
+    func test_regenerateFeed_createsFeedAssetAliases() throws {
+        let channel = makeChannel(name: "Science Weekly")
+        let relativePath = Paths.relativeEpisodePath(forFileName: "episode.mp3", in: channel)
+        let sourceAudioURL = try createDownloadedEpisodeFile(named: relativePath)
+        let sourceArtworkURL = try createArtworkFile(named: relativePath, width: 1400, height: 1400)
+        let episode = makeEpisode(channelID: channel.id, videoID: "episode123", fileName: relativePath)
+        store.channels = [channel]
+        store.episodes = [episode]
+
+        store.regenerateFeed()
+
+        let audioAliasURL = Paths.feedAudioURL(forVideoID: "episode123", in: tempDir)
+        let artworkAliasURL = Paths.feedArtworkURL(forVideoID: "episode123", in: tempDir)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: audioAliasURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: artworkAliasURL.path))
+
+        let audioAliasValues = try audioAliasURL.resourceValues(forKeys: [.isSymbolicLinkKey, .fileSizeKey])
+        let artworkAliasValues = try artworkAliasURL.resourceValues(forKeys: [.isSymbolicLinkKey, .fileSizeKey])
+        XCTAssertNotEqual(audioAliasValues.isSymbolicLink, true)
+        XCTAssertNotEqual(artworkAliasValues.isSymbolicLink, true)
+
+        let sourceAudioValues = try sourceAudioURL.resourceValues(forKeys: [.fileSizeKey])
+        let sourceArtworkValues = try sourceArtworkURL.resourceValues(forKeys: [.fileSizeKey])
+        XCTAssertEqual(audioAliasValues.fileSize, sourceAudioValues.fileSize)
+        XCTAssertEqual(artworkAliasValues.fileSize, sourceArtworkValues.fileSize)
+    }
+
     func test_regenerateFeed_onlyDownloadedEpisodesInFeed() throws {
         let channel = makeChannel()
         let downloaded = makeEpisode(channelID: channel.id, videoID: "dl1", fileName: "dl1.mp3")
@@ -295,7 +375,7 @@ final class StoreTests: XCTestCase {
 
         let content = try String(contentsOf: tempDir.appendingPathComponent("feed.xml"), encoding: .utf8)
         XCTAssertTrue(content.contains("http://new.example.com:8888/feed.xml"))
-        XCTAssertTrue(content.contains("http://new.example.com:8888/episodes/vid1.mp3"))
+        XCTAssertTrue(content.contains("http://new.example.com:8888/feed-assets/vid1.mp3"))
         XCTAssertFalse(content.contains("http://old.example.com:8888"))
     }
 
@@ -360,7 +440,7 @@ final class StoreTests: XCTestCase {
 
         let content = try String(contentsOf: tempDir.appendingPathComponent("feed.xml"), encoding: .utf8)
         XCTAssertTrue(content.contains("http://[fd7a:115c:a1e0::42]:8888/feed.xml"))
-        XCTAssertTrue(content.contains("http://[fd7a:115c:a1e0::42]:8888/episodes/vid1.mp3"))
+        XCTAssertTrue(content.contains("http://[fd7a:115c:a1e0::42]:8888/feed-assets/vid1.mp3"))
     }
 
     // MARK: - filteredEpisodes
@@ -736,7 +816,12 @@ final class StoreTests: XCTestCase {
 
         let episodesDir = Paths.ensureManagedEpisodesDirectory(in: customOutputDir)
         let audioFile = episodesDir.appendingPathComponent("reset-me.mp3")
+        let showArtworkFile = Paths.showArtworkURL(in: customOutputDir)
+        let feedAssetsDir = Paths.ensureFeedAssetsDirectory(in: customOutputDir)
+        let feedAssetAudio = feedAssetsDir.appendingPathComponent("reset-me.mp3")
         try Data("audio".utf8).write(to: audioFile)
+        try Data("cover".utf8).write(to: showArtworkFile)
+        try Data("alias".utf8).write(to: feedAssetAudio)
         FeedGenerator.write(
             episodes: [downloadedEpisode],
             channels: [channel],
@@ -770,6 +855,8 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: audioFile.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: episodesDir.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: customOutputDir.appendingPathComponent("feed.xml").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: showArtworkFile.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: feedAssetsDir.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: binDir.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: logsDir.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: logsDir.appendingPathComponent("recast.log").path))
