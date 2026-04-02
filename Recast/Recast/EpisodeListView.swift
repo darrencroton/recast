@@ -222,7 +222,7 @@ struct EpisodeRow: View {
                 if let downloadStatus {
                     Text(downloadStatus.phase.label)
                         .font(.caption2)
-                        .foregroundStyle(.tint)
+                        .foregroundStyle(.primary)
                 }
             }
 
