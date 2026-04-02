@@ -3,6 +3,7 @@ import SwiftUI
 @Observable
 final class AppStore {
     private static let defaultServerPort = 8888
+    private static let defaultServerHost = ""
     private static let defaultAutoFetchInterval = 0
     private static let defaultAutoStartServer = false
 
@@ -131,8 +132,8 @@ final class AppStore {
         channels = state.channels
         episodes = state.episodes
         outputDirectory = sanitizedOutputDirectory(URL(fileURLWithPath: state.outputDirectory))
-        serverPort = state.serverPort
-        serverHost = state.serverHost ?? ""
+        serverPort = sanitizedServerPort(state.serverPort)
+        serverHost = sanitizedServerHost(state.serverHost ?? Self.defaultServerHost)
         autoFetchInterval = state.autoFetchInterval ?? 0
         autoStartServer = state.autoStartServer ?? false
 
@@ -607,6 +608,10 @@ final class AppStore {
 
     // MARK: - Server
 
+    var defaultServerPort: Int {
+        Self.defaultServerPort
+    }
+
     func handleServerHostChange() {
         save()
         regenerateFeed()
@@ -621,6 +626,20 @@ final class AppStore {
 
         stopServer()
         startServer()
+    }
+
+    func commitServerHost(_ input: String) {
+        let sanitizedHost = sanitizedServerHost(input)
+        guard sanitizedHost != serverHost else { return }
+        serverHost = sanitizedHost
+        handleServerHostChange()
+    }
+
+    func commitServerPort(_ input: String) {
+        let sanitizedPort = sanitizedServerPort(input)
+        guard sanitizedPort != serverPort else { return }
+        serverPort = sanitizedPort
+        handleServerPortChange()
     }
 
     func startServer() {
@@ -869,7 +888,7 @@ final class AppStore {
         episodes.removeAll()
         outputDirectory = defaultOutputDirectory
         serverPort = Self.defaultServerPort
-        serverHost = ""
+        serverHost = Self.defaultServerHost
         autoFetchInterval = Self.defaultAutoFetchInterval
         autoStartServer = Self.defaultAutoStartServer
         activeDownloads.removeAll()
@@ -887,6 +906,24 @@ final class AppStore {
         guard pruned.count != episodes.count else { return false }
         episodes = pruned
         return true
+    }
+
+    private func sanitizedServerHost(_ host: String) -> String {
+        host.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    private func sanitizedServerPort(_ port: String) -> Int {
+        guard let parsedPort = Int(port.trimmingCharacters(in: .whitespacesAndNewlines)) else {
+            return Self.defaultServerPort
+        }
+        return sanitizedServerPort(parsedPort)
+    }
+
+    private func sanitizedServerPort(_ port: Int) -> Int {
+        guard (1...65_535).contains(port) else {
+            return Self.defaultServerPort
+        }
+        return port
     }
 
     private func normalizedURLHost(_ host: String) -> String {

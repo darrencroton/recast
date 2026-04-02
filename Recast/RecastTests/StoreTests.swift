@@ -237,6 +237,44 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(content.contains("http://old.example.com:8888"))
     }
 
+    func test_commitServerHost_blankInputResetsToDefault() {
+        store.serverHost = "custom.example.com"
+
+        store.commitServerHost("   ")
+
+        XCTAssertEqual(store.serverHost, "")
+    }
+
+    func test_commitServerHost_trimsWhitespace() {
+        store.commitServerHost("  custom.example.com  ")
+
+        XCTAssertEqual(store.serverHost, "custom.example.com")
+    }
+
+    func test_commitServerPort_blankInputResetsToDefault() {
+        store.serverPort = 9999
+
+        store.commitServerPort("   ")
+
+        XCTAssertEqual(store.serverPort, store.defaultServerPort)
+    }
+
+    func test_commitServerPort_invalidInputResetsToDefault() {
+        store.serverPort = 9999
+
+        store.commitServerPort("rrr")
+
+        XCTAssertEqual(store.serverPort, store.defaultServerPort)
+    }
+
+    func test_commitServerPort_outOfRangeInputResetsToDefault() {
+        store.serverPort = 9999
+
+        store.commitServerPort("70000")
+
+        XCTAssertEqual(store.serverPort, store.defaultServerPort)
+    }
+
     func test_regenerateFeed_wrapsIPv6HostInURLs() throws {
         let channel = makeChannel()
         let episode = makeEpisode(channelID: channel.id, videoID: "vid1", fileName: "vid1.mp3")
