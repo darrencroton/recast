@@ -6,6 +6,8 @@ final class AppStore {
     private static let defaultServerHost = ""
     private static let defaultAutoFetchInterval = 0
     private static let defaultAutoStartServer = false
+    private let openURLInDefaultApp: (URL) -> Bool
+    private let revealURLsInFinder: ([URL]) -> Void
 
     private enum ResolvedYouTubeInput {
         case collection(url: String)
@@ -65,12 +67,16 @@ final class AppStore {
         appSupportURL: URL = Paths.appSupport,
         defaultOutputDirectory: URL = Paths.defaultOutputDir,
         shouldLoadPersistentState: Bool = true,
-        autoCheckDependencies: Bool = true
+        autoCheckDependencies: Bool = true,
+        openURLInDefaultApp: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) },
+        revealURLsInFinder: @escaping ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) }
     ) {
         self.outputDirectory = defaultOutputDirectory
         self.appSupportURL = appSupportURL
         self.defaultOutputDirectory = defaultOutputDirectory
         self.stateFileURL = stateFileURL
+        self.openURLInDefaultApp = openURLInDefaultApp
+        self.revealURLsInFinder = revealURLsInFinder
         AppLogger.info("Initialising store with state file \(stateFileURL.path)", category: "store")
         if shouldLoadPersistentState {
             load()
@@ -531,10 +537,32 @@ final class AppStore {
         }
     }
 
+    func downloadedEpisodeFileURL(for episode: Episode) -> URL? {
+        guard let fileName = episode.fileName else { return nil }
+        let fileURL = Paths.episodeFileURL(forRelativePath: fileName, in: outputDirectory)
+        guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
+        return fileURL
+    }
+
+    func openEpisode(_ episode: Episode) {
+        guard let fileURL = downloadedEpisodeFileURL(for: episode) else {
+            statusMessage = "Episode file unavailable"
+            AppLogger.warning("Tried to open unavailable episode file for \(episode.videoID)", category: "episodes")
+            return
+        }
+
+        guard openURLInDefaultApp(fileURL) else {
+            statusMessage = "Couldn't open episode"
+            AppLogger.warning("Failed to open episode \(episode.videoID) at \(fileURL.path)", category: "episodes")
+            return
+        }
+
+        AppLogger.info("Opened episode \(episode.videoID) at \(fileURL.path)", category: "episodes")
+    }
+
     func revealInFinder(_ episode: Episode) {
-        guard let fileName = episode.fileName else { return }
-        let path = Paths.episodeFileURL(forRelativePath: fileName, in: outputDirectory)
-        NSWorkspace.shared.activateFileViewerSelecting([path])
+        guard let fileURL = downloadedEpisodeFileURL(for: episode) else { return }
+        revealURLsInFinder([fileURL])
     }
 
     // MARK: - Filtered episodes (search + channel filter)

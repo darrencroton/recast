@@ -63,9 +63,13 @@ struct EpisodeListView: View {
                         }
                     )
                     .tag(episode.id)
-                    .contextMenu { episodeContextMenu(for: episode) }
                 }
                 .listStyle(.inset)
+                .contextMenu(forSelectionType: UUID.self) { targetIDs in
+                    episodeContextMenu(for: targetIDs)
+                } primaryAction: { targetIDs in
+                    handlePrimaryAction(for: targetIDs)
+                }
                 .simultaneousGesture(TapGesture().onEnded {
                     onActivateSelection()
                 })
@@ -86,59 +90,76 @@ struct EpisodeListView: View {
     // MARK: - Context menu
 
     @ViewBuilder
-    private func episodeContextMenu(for episode: Episode) -> some View {
-        let targetIDs = contextTargetIDs(for: episode.id)
-        let targetEpisodes = targetIDs.compactMap { selectedEpisodesByID[$0] }
+    private func episodeContextMenu(for targetIDs: Set<UUID>) -> some View {
+        if !targetIDs.isEmpty {
+            let targetEpisodes = targetIDs.compactMap { selectedEpisodesByID[$0] }
 
-        if canDownload(targetEpisodes) {
-            Button {
-                selectedEpisodeIDs = targetIDs
-                onActivateSelection()
-                Task { await store.downloadEpisodes(targetIDs) }
-            } label: {
-                Label(
-                    targetIDs.count == 1 ? "Download Episode" : "Download Selected Episodes",
-                    systemImage: "arrow.down.circle"
-                )
+            if canDownload(targetEpisodes) {
+                Button {
+                    selectedEpisodeIDs = targetIDs
+                    onActivateSelection()
+                    Task { await store.downloadEpisodes(targetIDs) }
+                } label: {
+                    Label(
+                        targetIDs.count == 1 ? "Download Episode" : "Download Selected Episodes",
+                        systemImage: "arrow.down.circle"
+                    )
+                }
             }
-        }
 
-        if targetIDs.count == 1, let targetEpisode = targetEpisodes.first, store.activeDownloads.contains(targetEpisode.videoID) {
-            Button(role: .destructive) {
-                store.stopDownload(videoID: targetEpisode.videoID)
-            } label: {
-                Label("Stop Download", systemImage: "stop.circle")
+            if targetIDs.count == 1, let targetEpisode = targetEpisodes.first, store.activeDownloads.contains(targetEpisode.videoID) {
+                Button(role: .destructive) {
+                    store.stopDownload(videoID: targetEpisode.videoID)
+                } label: {
+                    Label("Stop Download", systemImage: "stop.circle")
+                }
+            } else if targetIDs.count == 1, let targetEpisode = targetEpisodes.first, targetEpisode.isDownloaded {
+                Divider()
+
+                Button {
+                    store.openEpisode(targetEpisode)
+                } label: {
+                    Label("Open in Default Player", systemImage: "play.circle")
+                }
+
+                Button {
+                    store.togglePlayed(targetEpisode.id)
+                } label: {
+                    Label(
+                        targetEpisode.isPlayed ? "Mark as Unplayed" : "Mark as Played",
+                        systemImage: targetEpisode.isPlayed ? "circle" : "checkmark.circle"
+                    )
+                }
+
+                Button {
+                    store.revealInFinder(targetEpisode)
+                } label: {
+                    Label("Reveal in Finder", systemImage: "folder")
+                }
             }
-        } else if targetIDs.count == 1, let targetEpisode = targetEpisodes.first, targetEpisode.isDownloaded {
+
             Divider()
 
-            Button {
-                store.togglePlayed(targetEpisode.id)
+            Button(role: .destructive) {
+                store.deleteEpisodes(targetIDs)
+                selectedEpisodeIDs.subtract(targetIDs)
             } label: {
                 Label(
-                    targetEpisode.isPlayed ? "Mark as Unplayed" : "Mark as Played",
-                    systemImage: targetEpisode.isPlayed ? "circle" : "checkmark.circle"
+                    targetIDs.count == 1 ? "Delete Episode" : "Delete Selected Episodes",
+                    systemImage: "trash"
                 )
             }
+        }
+    }
 
-            Button {
-                store.revealInFinder(targetEpisode)
-            } label: {
-                Label("Reveal in Finder", systemImage: "folder")
-            }
+    private func handlePrimaryAction(for targetIDs: Set<UUID>) {
+        guard targetIDs.count == 1, let episodeID = targetIDs.first, let episode = selectedEpisodesByID[episodeID] else {
+            return
         }
 
-        Divider()
-
-        Button(role: .destructive) {
-            store.deleteEpisodes(targetIDs)
-            selectedEpisodeIDs.subtract(targetIDs)
-        } label: {
-            Label(
-                targetIDs.count == 1 ? "Delete Episode" : "Delete Selected Episodes",
-                systemImage: "trash"
-            )
-        }
+        selectedEpisodeIDs = [episodeID]
+        onActivateSelection()
+        store.openEpisode(episode)
     }
 
     private var navigationTitle: String {
@@ -149,10 +170,6 @@ struct EpisodeListView: View {
         }
         if channelIDs.count > 1 { return "\(channelIDs.count) Sources" }
         return "Episodes"
-    }
-
-    private func contextTargetIDs(for episodeID: UUID) -> Set<UUID> {
-        selectedEpisodeIDs.contains(episodeID) ? selectedEpisodeIDs : [episodeID]
     }
 
     private func canDownload(_ episodes: [Episode]) -> Bool {

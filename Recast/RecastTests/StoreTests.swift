@@ -56,6 +56,16 @@ final class StoreTests: XCTestCase {
         return ep
     }
 
+    private func createDownloadedEpisodeFile(named relativePath: String) throws -> URL {
+        let fileURL = Paths.episodeFileURL(forRelativePath: relativePath, in: store.outputDirectory)
+        try FileManager.default.createDirectory(
+            at: fileURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("audio".utf8).write(to: fileURL)
+        return fileURL
+    }
+
     // MARK: - normalizeYouTubeURL: mobile → desktop
 
     func test_normalize_mobileScheme_convertedToDesktop() {
@@ -173,6 +183,49 @@ final class StoreTests: XCTestCase {
         store.channels = [channelA, channelB]
         store.episodes = [makeEpisode(channelID: channelB.id, videoID: "b1")]
         XCTAssertTrue(store.episodes(for: channelA.id).isEmpty)
+    }
+
+    // MARK: - downloaded episode files
+
+    func test_downloadedEpisodeFileURL_returnsExistingLocalFileURL() throws {
+        let channel = makeChannel()
+        let relativePath = "Channel Folder [abc12345]/test-episode.mp3"
+        let expectedURL = try createDownloadedEpisodeFile(named: relativePath)
+        let episode = makeEpisode(channelID: channel.id, videoID: "vid1", fileName: relativePath)
+
+        XCTAssertEqual(store.downloadedEpisodeFileURL(for: episode), expectedURL)
+    }
+
+    func test_downloadedEpisodeFileURL_returnsNilWhenFileIsMissing() {
+        let channel = makeChannel()
+        let episode = makeEpisode(channelID: channel.id, videoID: "vid1", fileName: "missing.mp3")
+
+        XCTAssertNil(store.downloadedEpisodeFileURL(for: episode))
+    }
+
+    func test_openEpisode_opensExistingDownloadedFileInDefaultApp() throws {
+        var openedURL: URL?
+        store = AppStore(
+            stateFileURL: tempStateFile,
+            appSupportURL: tempAppSupportDir,
+            defaultOutputDirectory: defaultOutputDir,
+            shouldLoadPersistentState: false,
+            autoCheckDependencies: false,
+            openURLInDefaultApp: {
+                openedURL = $0
+                return true
+            }
+        )
+        store.outputDirectory = tempDir
+
+        let channel = makeChannel()
+        let relativePath = "Channel Folder [abc12345]/test-episode.mp3"
+        let expectedURL = try createDownloadedEpisodeFile(named: relativePath)
+        let episode = makeEpisode(channelID: channel.id, videoID: "vid1", fileName: relativePath)
+
+        store.openEpisode(episode)
+
+        XCTAssertEqual(openedURL, expectedURL)
     }
 
     // MARK: - regenerateFeed
