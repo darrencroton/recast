@@ -99,7 +99,9 @@ final class PodcastServer {
             return
         }
 
-        let fileSize = (try? FileManager.default.attributesOfItem(atPath: resolved.path)[.size] as? NSNumber)?.uint64Value ?? 0
+        let attributes = try? FileManager.default.attributesOfItem(atPath: resolved.path)
+        let fileSize = (attributes?[.size] as? NSNumber)?.uint64Value ?? 0
+        let lastModified = attributes?[.modificationDate] as? Date
         let contentType = mimeType(for: resolved.pathExtension)
         let range = parseRangeHeader(requestHeaders["range"], fileSize: fileSize)
 
@@ -122,7 +124,8 @@ final class PodcastServer {
             fileSize: fileSize,
             range: responseRange,
             contentLength: responseLength,
-            status: status
+            status: status,
+            lastModified: lastModified
         )
 
         if responseRange.start > 0 {
@@ -188,13 +191,23 @@ final class PodcastServer {
         })
     }
 
-    private func responseHeaders(contentType: String, fileSize: UInt64, range: ByteRange, contentLength: UInt64, status: String) -> [String: String] {
+    private func responseHeaders(
+        contentType: String,
+        fileSize: UInt64,
+        range: ByteRange,
+        contentLength: UInt64,
+        status: String,
+        lastModified: Date?
+    ) -> [String: String] {
         var headers: [String: String] = [
             "Content-Type": contentType,
             "Content-Length": String(contentLength),
             "Access-Control-Allow-Origin": "*",
             "Accept-Ranges": "bytes"
         ]
+        if let lastModified {
+            headers["Last-Modified"] = Self.httpDate(lastModified)
+        }
         if status == "206 Partial Content" {
             headers["Content-Range"] = "bytes \(range.start)-\(range.end)/\(fileSize)"
         }
@@ -250,6 +263,14 @@ final class PodcastServer {
         case "json": return "application/json"
         default: return "application/octet-stream"
         }
+    }
+
+    private static func httpDate(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+        return formatter.string(from: date)
     }
 
     enum ServerError: LocalizedError {

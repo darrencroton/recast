@@ -66,6 +66,7 @@ final class PodcastServerTests: XCTestCase {
         XCTAssertEqual(data.count, 0)
         XCTAssertEqual(http.value(forHTTPHeaderField: "Content-Length"), String(body.count))
         XCTAssertEqual(http.value(forHTTPHeaderField: "Accept-Ranges"), "bytes")
+        XCTAssertNotNil(http.value(forHTTPHeaderField: "Last-Modified"))
     }
 
     func test_getSupportsByteRangeResponses() async throws {
@@ -109,7 +110,9 @@ final class PodcastServerTests: XCTestCase {
         address.sin_addr = in_addr(s_addr: inet_addr("127.0.0.1"))
 
         let bindResult = withUnsafePointer(to: &address) { pointer -> Int32 in
-            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) }
+            pointer.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                Darwin.bind(descriptor, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
+            }
         }
         guard bindResult == 0 else {
             throw POSIXError(.EADDRINUSE)

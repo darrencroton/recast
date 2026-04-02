@@ -3,6 +3,7 @@ import Foundation
 enum Paths {
     private static let fm = FileManager.default
     static let managedEpisodesMarkerFileName = ".recast-owned"
+    static let showArtworkFileName = "show-cover.jpg"
 
     static var appSupport: URL {
         let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -95,6 +96,10 @@ enum Paths {
             forRelativePath: Episode.artworkFileName(forEpisodeFileName: fileName),
             in: outputDir
         )
+    }
+
+    static func showArtworkURL(in outputDir: URL) -> URL {
+        outputDir.appendingPathComponent(showArtworkFileName)
     }
 
     static var ytDlpInBin: URL {

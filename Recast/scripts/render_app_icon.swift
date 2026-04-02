@@ -1,18 +1,57 @@
 import AppKit
 import Foundation
 
-let arguments = CommandLine.arguments
-guard arguments.count == 2 else {
-    fputs("Usage: render_app_icon.swift <output-path>\n", stderr)
+struct Options {
+    let outputURL: URL
+    let canvasWidth: Int
+    let opaqueBackground: Bool
+}
+
+func fail(_ message: String) -> Never {
+    FileHandle.standardError.write(Data(message.utf8))
     exit(1)
 }
 
-let outputURL = URL(fileURLWithPath: arguments[1])
-let canvasSize = NSSize(width: 1024, height: 1024)
+func parseOptions() -> Options {
+    let arguments = Array(CommandLine.arguments.dropFirst())
+    guard let outputPath = arguments.first else {
+        fail("Usage: render_app_icon.swift <output-path> [--size pixels] [--opaque]\n")
+    }
+
+    var canvasWidth = 1024
+    var opaqueBackground = false
+    var index = 1
+
+    while index < arguments.count {
+        switch arguments[index] {
+        case "--size":
+            guard index + 1 < arguments.count, let parsedWidth = Int(arguments[index + 1]), parsedWidth > 0 else {
+                fail("Expected a positive integer after --size\n")
+            }
+            canvasWidth = parsedWidth
+            index += 2
+        case "--opaque":
+            opaqueBackground = true
+            index += 1
+        default:
+            fail("Unknown option: \(arguments[index])\n")
+        }
+    }
+
+    return Options(
+        outputURL: URL(fileURLWithPath: outputPath),
+        canvasWidth: canvasWidth,
+        opaqueBackground: opaqueBackground
+    )
+}
+
+let options = parseOptions()
+let canvasSize = NSSize(width: options.canvasWidth, height: options.canvasWidth)
+let scale = CGFloat(options.canvasWidth) / 1024.0
 let bitmap = NSBitmapImageRep(
     bitmapDataPlanes: nil,
-    pixelsWide: Int(canvasSize.width),
-    pixelsHigh: Int(canvasSize.height),
+    pixelsWide: options.canvasWidth,
+    pixelsHigh: options.canvasWidth,
     bitsPerSample: 8,
     samplesPerPixel: 4,
     hasAlpha: true,
@@ -32,12 +71,34 @@ guard let context = NSGraphicsContext.current?.cgContext else {
 context.setAllowsAntialiasing(true)
 context.setShouldAntialias(true)
 
-let tileRect = NSRect(x: 40, y: 40, width: 944, height: 944)
-let tilePath = NSBezierPath(roundedRect: tileRect, xRadius: 220, yRadius: 220)
+func scaled(_ value: CGFloat) -> CGFloat {
+    value * scale
+}
 
 func color(_ red: Double, _ green: Double, _ blue: Double, _ alpha: Double = 1.0) -> NSColor {
     NSColor(srgbRed: red / 255.0, green: green / 255.0, blue: blue / 255.0, alpha: alpha)
 }
+
+let backgroundTop = color(74, 201, 169)
+let backgroundBottom = color(22, 138, 130)
+let outerArcColor = NSColor.white
+let innerArcColor = color(182, 255, 232)
+let waveColor = color(12, 110, 109, 0.45)
+let centerColor = color(239, 252, 249)
+let outlineColor = color(255, 255, 255, 0.18)
+
+let fullRect = NSRect(origin: .zero, size: canvasSize)
+let tileRect = NSRect(
+    x: scaled(40),
+    y: scaled(40),
+    width: scaled(944),
+    height: scaled(944)
+)
+let tilePath = NSBezierPath(
+    roundedRect: tileRect,
+    xRadius: scaled(220),
+    yRadius: scaled(220)
+)
 
 func stroke(_ path: NSBezierPath, color: NSColor, width: CGFloat, lineCap: NSBezierPath.LineCapStyle = .round) {
     color.setStroke()
@@ -53,23 +114,27 @@ func fill(_ path: NSBezierPath, color: NSColor) {
 }
 
 func fillCircle(center: CGPoint, radius: CGFloat, color: NSColor) {
-    let circle = NSBezierPath(ovalIn: NSRect(x: center.x - radius, y: center.y - radius, width: radius * 2, height: radius * 2))
+    let circle = NSBezierPath(
+        ovalIn: NSRect(
+            x: center.x - radius,
+            y: center.y - radius,
+            width: radius * 2,
+            height: radius * 2
+        )
+    )
     fill(circle, color: color)
 }
 
-let backgroundTop = color(74, 201, 169)
-let backgroundBottom = color(22, 138, 130)
-let outerArcColor = NSColor.white
-let innerArcColor = color(182, 255, 232)
-let waveColor = color(12, 110, 109, 0.45)
-let centerColor = color(239, 252, 249)
-let outlineColor = color(255, 255, 255, 0.18)
-
 func drawGradientTile() {
+    if options.opaqueBackground {
+        let backgroundGradient = NSGradient(colors: [backgroundTop, backgroundBottom])!
+        backgroundGradient.draw(in: fullRect, angle: 90)
+    }
+
     let shadow = NSShadow()
     shadow.shadowColor = NSColor.black.withAlphaComponent(0.18)
-    shadow.shadowBlurRadius = 42
-    shadow.shadowOffset = NSSize(width: 0, height: -18)
+    shadow.shadowBlurRadius = scaled(42)
+    shadow.shadowOffset = NSSize(width: 0, height: -scaled(18))
     shadow.set()
 
     let gradient = NSGradient(colors: [backgroundTop, backgroundBottom])!
@@ -79,8 +144,12 @@ func drawGradientTile() {
     NSGraphicsContext.saveGraphicsState()
     NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
 
-    let highlight = NSBezierPath(roundedRect: tileRect.insetBy(dx: 2, dy: 2), xRadius: 218, yRadius: 218)
-    stroke(highlight, color: outlineColor, width: 3)
+    let highlight = NSBezierPath(
+        roundedRect: tileRect.insetBy(dx: scaled(2), dy: scaled(2)),
+        xRadius: scaled(218),
+        yRadius: scaled(218)
+    )
+    stroke(highlight, color: outlineColor, width: scaled(3))
 }
 
 func drawWaveBars(center: CGPoint, color: NSColor, barWidth: CGFloat, gap: CGFloat, heights: [CGFloat]) {
@@ -97,36 +166,53 @@ func drawWaveBars(center: CGPoint, color: NSColor, barWidth: CGFloat, gap: CGFlo
 func drawArrowLoop(center: CGPoint, radius: CGFloat) {
     let clockwise = NSBezierPath()
     clockwise.appendArc(withCenter: center, radius: radius, startAngle: 135, endAngle: 338, clockwise: false)
-    stroke(clockwise, color: outerArcColor, width: 52)
+    stroke(clockwise, color: outerArcColor, width: scaled(52))
 
     let clockwiseHead = NSBezierPath()
-    clockwiseHead.move(to: CGPoint(x: center.x + radius + 12, y: center.y - 34))
-    clockwiseHead.line(to: CGPoint(x: center.x + radius - 84, y: center.y - 12))
-    clockwiseHead.line(to: CGPoint(x: center.x + radius - 20, y: center.y + 54))
+    clockwiseHead.move(to: CGPoint(x: center.x + radius + scaled(12), y: center.y - scaled(34)))
+    clockwiseHead.line(to: CGPoint(x: center.x + radius - scaled(84), y: center.y - scaled(12)))
+    clockwiseHead.line(to: CGPoint(x: center.x + radius - scaled(20), y: center.y + scaled(54)))
     clockwiseHead.close()
     fill(clockwiseHead, color: outerArcColor)
 
     let counter = NSBezierPath()
-    counter.appendArc(withCenter: center, radius: radius - 108, startAngle: 332, endAngle: 138, clockwise: true)
-    stroke(counter, color: innerArcColor, width: 46)
+    counter.appendArc(withCenter: center, radius: radius - scaled(108), startAngle: 332, endAngle: 138, clockwise: true)
+    stroke(counter, color: innerArcColor, width: scaled(46))
 
     let counterHead = NSBezierPath()
-    counterHead.move(to: CGPoint(x: center.x - radius + 54, y: center.y + 16))
-    counterHead.line(to: CGPoint(x: center.x - radius + 138, y: center.y - 26))
-    counterHead.line(to: CGPoint(x: center.x - radius + 114, y: center.y + 82))
+    counterHead.move(to: CGPoint(x: center.x - radius + scaled(54), y: center.y + scaled(16)))
+    counterHead.line(to: CGPoint(x: center.x - radius + scaled(138), y: center.y - scaled(26)))
+    counterHead.line(to: CGPoint(x: center.x - radius + scaled(114), y: center.y + scaled(82)))
     counterHead.close()
     fill(counterHead, color: innerArcColor)
 }
 
 drawGradientTile()
-drawArrowLoop(center: CGPoint(x: 512, y: 532), radius: 290)
-drawWaveBars(center: CGPoint(x: 512, y: 512), color: waveColor, barWidth: 36, gap: 24, heights: [88, 188, 280, 188, 88])
-fillCircle(center: CGPoint(x: 512, y: 512), radius: 62, color: centerColor)
+drawArrowLoop(center: CGPoint(x: canvasSize.width / 2, y: scaled(532)), radius: scaled(290))
+drawWaveBars(
+    center: CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2),
+    color: waveColor,
+    barWidth: scaled(36),
+    gap: scaled(24),
+    heights: [scaled(88), scaled(188), scaled(280), scaled(188), scaled(88)]
+)
+fillCircle(center: CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2), radius: scaled(62), color: centerColor)
 
 NSGraphicsContext.restoreGraphicsState()
 
-guard let data = bitmap.representation(using: .png, properties: [:]) else {
-    fatalError("Unable to encode PNG")
+let fileType: NSBitmapImageRep.FileType
+let properties: [NSBitmapImageRep.PropertyKey: Any]
+switch options.outputURL.pathExtension.lowercased() {
+case "jpg", "jpeg":
+    fileType = .jpeg
+    properties = [.compressionFactor: 0.95]
+default:
+    fileType = .png
+    properties = [:]
 }
 
-try data.write(to: outputURL, options: .atomic)
+guard let data = bitmap.representation(using: fileType, properties: properties) else {
+    fatalError("Unable to encode artwork")
+}
+
+try data.write(to: options.outputURL, options: .atomic)

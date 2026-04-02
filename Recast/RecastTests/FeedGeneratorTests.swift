@@ -315,6 +315,18 @@ final class FeedGeneratorTests: XCTestCase {
         XCTAssertTrue(try feedContent().contains("http://localhost:1234/feed.xml"))
     }
 
+    func test_write_includesShowArtworkWhenShowCoverExists() throws {
+        let channel = makeChannel()
+        try Data("png".utf8).write(to: Paths.showArtworkURL(in: tempDir))
+
+        FeedGenerator.write(episodes: [], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
+
+        let content = try feedContent()
+        XCTAssertTrue(content.contains("<itunes:image href=\"http://localhost:8888/show-cover.jpg\"/>"))
+        XCTAssertTrue(content.contains("<image>"))
+        XCTAssertTrue(content.contains("<url>http://localhost:8888/show-cover.jpg</url>"))
+    }
+
     // MARK: - write(): episode ordering
 
     func test_write_preservesInputOrder() throws {

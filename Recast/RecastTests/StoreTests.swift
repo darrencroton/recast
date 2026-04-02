@@ -239,6 +239,15 @@ final class StoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: tempDir.appendingPathComponent("feed.xml").path))
     }
 
+    func test_regenerateFeed_copiesBundledShowArtworkToOutputDirectory() {
+        store.channels = [makeChannel()]
+        store.episodes = []
+
+        store.regenerateFeed()
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: Paths.showArtworkURL(in: tempDir).path))
+    }
+
     func test_regenerateFeed_onlyDownloadedEpisodesInFeed() throws {
         let channel = makeChannel()
         let downloaded = makeEpisode(channelID: channel.id, videoID: "dl1", fileName: "dl1.mp3")

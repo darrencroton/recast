@@ -625,6 +625,7 @@ final class AppStore {
     func regenerateFeed() {
         let baseURL = serverBaseURL
         let downloaded = sortEpisodesNewestFirst(validEpisodes.filter(\.isDownloaded))
+        ShowArtwork.ensureExists(in: outputDirectory)
         AppLogger.info("Regenerating feed with \(downloaded.count) downloaded episode(s) at \(baseURL)", category: "feed")
         FeedGenerator.write(
             episodes: downloaded,
@@ -1188,7 +1189,7 @@ final class AppStore {
 
         return content.contains("<title>Recast</title>")
             && content.contains("<itunes:author>Recast</itunes:author>")
-            && content.contains("<link>https://github.com</link>")
+            && content.contains("<language>en</language>")
     }
 
     private func removeManagedAppSupportArtifacts(removeStateFile: Bool) {

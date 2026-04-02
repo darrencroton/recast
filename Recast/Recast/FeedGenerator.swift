@@ -6,6 +6,9 @@ enum FeedGenerator {
     static func write(episodes: [Episode], channels: [Channel], baseURL: String, to outputDir: URL) {
         let now = rfc2822(Date())
         let channelNames = channels.map(\.name).joined(separator: ", ")
+        let feedDescription = xmlEscape("YouTube talks collected with Recast. Sources: \(channelNames)")
+        let showArtworkElement = showArtworkElement(baseURL: baseURL, outputDir: outputDir)
+        let rssImageElement = rssImageElement(baseURL: baseURL, outputDir: outputDir)
 
         var items = ""
         for ep in episodes {
@@ -43,12 +46,13 @@ enum FeedGenerator {
              xmlns:atom="http://www.w3.org/2005/Atom">
           <channel>
             <title>Recast</title>
-            <description>\(xmlEscape("YouTube talks collected with Recast. Sources: \(channelNames)"))</description>
-            <link>https://github.com</link>
+            <description>\(feedDescription)</description>
+            <link>\(xmlEscape(baseURL))</link>
             <language>en</language>
             <lastBuildDate>\(now)</lastBuildDate>
             <atom:link href="\(xmlEscape(baseURL))/feed.xml" rel="self" type="application/rss+xml"/>
             <itunes:author>Recast</itunes:author>
+            <itunes:summary>\(feedDescription)</itunes:summary>\(showArtworkElement)\(rssImageElement)
             <itunes:category text="Science"/>
             <itunes:explicit>false</itunes:explicit>
         \(items)
@@ -86,6 +90,28 @@ enum FeedGenerator {
         return String(format: "%02d:%02d:%02d", h, m, s)
     }
 
+    private static func showArtworkElement(baseURL: String, outputDir: URL) -> String {
+        let artworkURL = Paths.showArtworkURL(in: outputDir)
+        guard FileManager.default.fileExists(atPath: artworkURL.path) else { return "" }
+
+        return "\n            <itunes:image href=\"\(xmlEscape(showArtworkURL(baseURL: baseURL)))\"/>"
+    }
+
+    private static func rssImageElement(baseURL: String, outputDir: URL) -> String {
+        let artworkURL = Paths.showArtworkURL(in: outputDir)
+        guard FileManager.default.fileExists(atPath: artworkURL.path) else { return "" }
+
+        let artworkURLString = xmlEscape(showArtworkURL(baseURL: baseURL))
+        return """
+
+            <image>
+              <url>\(artworkURLString)</url>
+              <title>Recast</title>
+              <link>\(xmlEscape(baseURL))</link>
+            </image>
+        """
+    }
+
     private static func resourceURL(baseURL: String, relativePath: String) -> String {
         guard let base = URL(string: baseURL) else {
             return "\(baseURL)/episodes/\(relativePath)"
@@ -94,6 +120,16 @@ enum FeedGenerator {
         return base
             .appendingPathComponent("episodes", isDirectory: true)
             .appendingPathComponent(relativePath)
+            .absoluteString
+    }
+
+    private static func showArtworkURL(baseURL: String) -> String {
+        guard let base = URL(string: baseURL) else {
+            return "\(baseURL)/\(Paths.showArtworkFileName)"
+        }
+
+        return base
+            .appendingPathComponent(Paths.showArtworkFileName)
             .absoluteString
     }
 }

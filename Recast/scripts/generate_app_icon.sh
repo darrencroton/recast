@@ -5,18 +5,22 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 APPICONSET_DIR="$SCRIPT_DIR/../Recast/Assets.xcassets/AppIcon.appiconset"
 MASTER_ICON=""
 MASTER_ONLY=false
+MASTER_SIZE=1024
+OPAQUE_MASTER=false
 
 usage() {
     cat <<EOF
-Usage: $(basename "$0") [--master PATH] [--master-only] [--appiconset-dir PATH]
+Usage: $(basename "$0") [--master PATH] [--master-only] [--appiconset-dir PATH] [--size PIXELS] [--opaque]
 
 Renders the Recast app icon. By default it installs the rendered icon into
 Recast/Recast/Assets.xcassets/AppIcon.appiconset.
 
 Options:
-  --master PATH        Write the 1024x1024 master PNG to PATH
+  --master PATH        Write the rendered master PNG to PATH
   --master-only        Only write the master PNG; do not populate an app icon set
   --appiconset-dir DIR Write resized icon assets into DIR instead of the default app icon set
+  --size PIXELS        Render the master artwork at the given square size
+  --opaque             Render an opaque background instead of transparent margins
   --help               Show this help text
 EOF
 }
@@ -34,6 +38,14 @@ while [[ $# -gt 0 ]]; do
         --appiconset-dir)
             APPICONSET_DIR="${2:-}"
             shift 2
+            ;;
+        --size)
+            MASTER_SIZE="${2:-}"
+            shift 2
+            ;;
+        --opaque)
+            OPAQUE_MASTER=true
+            shift
             ;;
         --help)
             usage
@@ -60,7 +72,17 @@ if [[ -z "$MASTER_ICON" ]]; then
 fi
 
 mkdir -p "$(dirname "$MASTER_ICON")"
-xcrun swift "$SCRIPT_DIR/render_app_icon.swift" "$MASTER_ICON"
+swift_args=(
+    "$SCRIPT_DIR/render_app_icon.swift"
+    "$MASTER_ICON"
+    "--size" "$MASTER_SIZE"
+)
+
+if [[ "$OPAQUE_MASTER" == true ]]; then
+    swift_args+=("--opaque")
+fi
+
+xcrun swift "${swift_args[@]}"
 
 if [[ "$MASTER_ONLY" == false ]]; then
     mkdir -p "$APPICONSET_DIR"
