@@ -304,6 +304,18 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.serverHost, "custom.example.com")
     }
 
+    func test_commitServerPort_validInputUpdatesPort() {
+        store.commitServerPort("9999")
+
+        XCTAssertEqual(store.serverPort, 9999)
+    }
+
+    func test_commitServerPort_trimsWhitespace() {
+        store.commitServerPort("  9999  ")
+
+        XCTAssertEqual(store.serverPort, 9999)
+    }
+
     func test_commitServerPort_blankInputResetsToDefault() {
         store.serverPort = 9999
 
@@ -656,6 +668,24 @@ final class StoreTests: XCTestCase {
         )
 
         XCTAssertEqual(loadedStore.outputDirectory.standardizedFileURL, defaultOutputDir.standardizedFileURL)
+    }
+
+    func test_saveAndLoad_preservesServerHostAndServerPort() {
+        store.serverHost = "custom.example.com"
+        store.serverPort = 9999
+
+        store.save()
+
+        let reloadedStore = AppStore(
+            stateFileURL: tempStateFile,
+            appSupportURL: tempAppSupportDir,
+            defaultOutputDirectory: defaultOutputDir,
+            shouldLoadPersistentState: true,
+            autoCheckDependencies: false
+        )
+
+        XCTAssertEqual(reloadedStore.serverHost, "custom.example.com")
+        XCTAssertEqual(reloadedStore.serverPort, 9999)
     }
 
     func test_cleanupPartialArtifacts_removesOnlyMatchingFiles() async throws {
