@@ -601,8 +601,8 @@ final class AppStore {
     }
 
     func artworkURL(for episode: Episode) -> URL? {
-        guard let fileName = episode.fileName else { return nil }
-        let artworkURL = Paths.artworkURL(forEpisodeFileName: fileName, in: outputDirectory)
+        guard episode.fileName != nil else { return nil }
+        let artworkURL = Paths.feedArtworkURL(forVideoID: episode.videoID, in: outputDirectory)
         guard FileManager.default.fileExists(atPath: artworkURL.path) else { return nil }
         return artworkURL
     }
@@ -625,6 +625,7 @@ final class AppStore {
     func regenerateFeed() {
         let baseURL = serverBaseURL
         let downloaded = sortEpisodesNewestFirst(validEpisodes.filter(\.isDownloaded))
+        migrateLegacyEpisodeArtwork(downloaded)
         normalizeDownloadedEpisodeArtwork(downloaded)
         ShowArtwork.ensureExists(in: outputDirectory)
         FeedAssetLinks.sync(downloadedEpisodes: downloaded, in: outputDirectory)
@@ -1099,7 +1100,6 @@ final class AppStore {
     private func removeManagedEpisodeArtifacts(for episodes: [Episode], channels: [Channel], in outputDirectory: URL) {
         let fileManager = FileManager.default
         let episodesDir = Paths.episodesDirectoryURL(in: outputDirectory)
-        guard fileManager.fileExists(atPath: episodesDir.path) else { return }
 
         let downloadedFileURLs = Set(
             episodes.compactMap { episode in
@@ -1113,11 +1113,22 @@ final class AppStore {
         }
 
         let downloadedArtworkURLs = Set(
-            episodes.compactMap { episode in
-                episode.fileName.map { Paths.artworkURL(forEpisodeFileName: $0, in: outputDirectory) }
+            episodes.map { episode in
+                Paths.feedArtworkURL(forVideoID: episode.videoID, in: outputDirectory)
             }
         )
         for artworkURL in downloadedArtworkURLs {
+            if fileManager.fileExists(atPath: artworkURL.path) {
+                try? fileManager.removeItem(at: artworkURL)
+            }
+        }
+
+        let legacyArtworkURLs = Set(
+            episodes.compactMap { episode in
+                episode.fileName.map { Paths.legacyArtworkURL(forEpisodeFileName: $0, in: outputDirectory) }
+            }
+        )
+        for artworkURL in legacyArtworkURLs {
             if fileManager.fileExists(atPath: artworkURL.path) {
                 try? fileManager.removeItem(at: artworkURL)
             }
@@ -1206,10 +1217,44 @@ final class AppStore {
 
     private func normalizeDownloadedEpisodeArtwork(_ downloadedEpisodes: [Episode]) {
         for episode in downloadedEpisodes {
-            guard let fileName = episode.fileName else { continue }
-            let artworkURL = Paths.artworkURL(forEpisodeFileName: fileName, in: outputDirectory)
+            let artworkURL = Paths.feedArtworkURL(forVideoID: episode.videoID, in: outputDirectory)
             guard FileManager.default.fileExists(atPath: artworkURL.path) else { continue }
             EpisodeArtwork.ensurePodcastReady(at: artworkURL)
+        }
+    }
+
+    private func migrateLegacyEpisodeArtwork(_ downloadedEpisodes: [Episode]) {
+        let fileManager = FileManager.default
+        _ = Paths.ensureFeedAssetsDirectory(in: outputDirectory)
+
+        for episode in downloadedEpisodes {
+            guard let fileName = episode.fileName else { continue }
+
+            let canonicalArtworkURL = Paths.feedArtworkURL(forVideoID: episode.videoID, in: outputDirectory)
+            let legacyArtworkURL = Paths.legacyArtworkURL(forEpisodeFileName: fileName, in: outputDirectory)
+
+            if fileManager.fileExists(atPath: canonicalArtworkURL.path) {
+                if fileManager.fileExists(atPath: legacyArtworkURL.path) {
+                    try? fileManager.removeItem(at: legacyArtworkURL)
+                }
+                continue
+            }
+
+            guard fileManager.fileExists(atPath: legacyArtworkURL.path) else { continue }
+
+            do {
+                try fileManager.moveItem(at: legacyArtworkURL, to: canonicalArtworkURL)
+            } catch {
+                do {
+                    try fileManager.copyItem(at: legacyArtworkURL, to: canonicalArtworkURL)
+                    try? fileManager.removeItem(at: legacyArtworkURL)
+                } catch {
+                    AppLogger.error(
+                        "Failed to migrate artwork for \(episode.videoID): \(error.localizedDescription)",
+                        category: "feed"
+                    )
+                }
+            }
         }
     }
 

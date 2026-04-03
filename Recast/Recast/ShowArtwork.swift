@@ -155,13 +155,9 @@ enum FeedAssetLinks {
             desiredPaths.insert(targetAudioURL.standardizedFileURL.path)
             refreshAlias(at: targetAudioURL, pointingTo: sourceAudioURL)
 
-            let sourceArtworkURL = Paths.artworkURL(forEpisodeFileName: fileName, in: outputDir)
             let targetArtworkURL = Paths.feedArtworkURL(forVideoID: episode.videoID, in: outputDir)
-            if fileManager.fileExists(atPath: sourceArtworkURL.path) {
+            if fileManager.fileExists(atPath: targetArtworkURL.path) {
                 desiredPaths.insert(targetArtworkURL.standardizedFileURL.path)
-                refreshAlias(at: targetArtworkURL, pointingTo: sourceArtworkURL)
-            } else if fileManager.fileExists(atPath: targetArtworkURL.path) {
-                try? fileManager.removeItem(at: targetArtworkURL)
             }
         }
 

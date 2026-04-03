@@ -92,7 +92,7 @@ enum Paths {
         episodesDirectoryURL(in: outputDir).appendingPathComponent(relativePath)
     }
 
-    static func artworkURL(forEpisodeFileName fileName: String, in outputDir: URL) -> URL {
+    static func legacyArtworkURL(forEpisodeFileName fileName: String, in outputDir: URL) -> URL {
         episodeFileURL(
             forRelativePath: Episode.artworkFileName(forEpisodeFileName: fileName),
             in: outputDir

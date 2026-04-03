@@ -67,8 +67,8 @@ final class StoreTests: XCTestCase {
         return fileURL
     }
 
-    private func createArtworkFile(named relativePath: String, width: Int, height: Int) throws -> URL {
-        let artworkURL = Paths.artworkURL(forEpisodeFileName: relativePath, in: store.outputDirectory)
+    private func createArtworkFile(videoID: String, width: Int, height: Int) throws -> URL {
+        let artworkURL = Paths.feedArtworkURL(forVideoID: videoID, in: store.outputDirectory)
         try FileManager.default.createDirectory(
             at: artworkURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -287,7 +287,7 @@ final class StoreTests: XCTestCase {
         let channel = makeChannel(name: "Science Weekly")
         let relativePath = Paths.relativeEpisodePath(forFileName: "episode.mp3", in: channel)
         _ = try createDownloadedEpisodeFile(named: relativePath)
-        let artworkURL = try createArtworkFile(named: relativePath, width: 1280, height: 720)
+        let artworkURL = try createArtworkFile(videoID: "episode", width: 1280, height: 720)
         let episode = makeEpisode(channelID: channel.id, videoID: "episode", fileName: relativePath)
         store.channels = [channel]
         store.episodes = [episode]
@@ -304,7 +304,7 @@ final class StoreTests: XCTestCase {
         let channel = makeChannel(name: "Science Weekly")
         let relativePath = Paths.relativeEpisodePath(forFileName: "episode.mp3", in: channel)
         let sourceAudioURL = try createDownloadedEpisodeFile(named: relativePath)
-        let sourceArtworkURL = try createArtworkFile(named: relativePath, width: 1400, height: 1400)
+        let sourceArtworkURL = try createArtworkFile(videoID: "episode123", width: 1400, height: 1400)
         let episode = makeEpisode(channelID: channel.id, videoID: "episode123", fileName: relativePath)
         store.channels = [channel]
         store.episodes = [episode]
@@ -569,11 +569,11 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: mp3Path.path))
     }
 
-    func test_deleteEpisodes_removesArtworkSidecar() throws {
+    func test_deleteEpisodes_removesFeedArtwork() throws {
         let chID = UUID()
         let ep = makeEpisode(channelID: chID, videoID: "v1", fileName: "v1.mp3")
         store.episodes = [ep]
-        let artworkPath = Paths.artworkURL(forEpisodeFileName: "v1.mp3", in: tempDir)
+        let artworkPath = Paths.feedArtworkURL(forVideoID: ep.videoID, in: tempDir)
         try FileManager.default.createDirectory(at: artworkPath.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("fake".utf8).write(to: artworkPath)
 
@@ -615,13 +615,13 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: mp3Path.path))
     }
 
-    func test_deleteEpisodes_removesNestedArtworkSidecar() throws {
+    func test_deleteEpisodes_removesNestedLegacyArtworkSidecar() throws {
         let channel = makeChannel(name: "Science Weekly")
         let relativePath = Paths.relativeEpisodePath(forFileName: "v1.mp3", in: channel)
         let ep = makeEpisode(channelID: channel.id, videoID: "v1", fileName: relativePath)
         store.channels = [channel]
         store.episodes = [ep]
-        let artworkPath = Paths.artworkURL(forEpisodeFileName: relativePath, in: tempDir)
+        let artworkPath = Paths.legacyArtworkURL(forEpisodeFileName: relativePath, in: tempDir)
         try FileManager.default.createDirectory(at: artworkPath.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("fake".utf8).write(to: artworkPath)
 
@@ -647,13 +647,34 @@ final class StoreTests: XCTestCase {
         let newer = makeEpisode(channelID: channel.id, videoID: "newer", daysAgo: 1, fileName: "newer.mp3")
         store.channels = [channel]
         store.episodes = [older, newer]
-        let olderArtwork = Paths.artworkURL(forEpisodeFileName: "older.mp3", in: tempDir)
-        let newerArtwork = Paths.artworkURL(forEpisodeFileName: "newer.mp3", in: tempDir)
+        let olderArtwork = Paths.feedArtworkURL(forVideoID: "older", in: tempDir)
+        let newerArtwork = Paths.feedArtworkURL(forVideoID: "newer", in: tempDir)
         try FileManager.default.createDirectory(at: olderArtwork.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("old".utf8).write(to: olderArtwork)
         try Data("new".utf8).write(to: newerArtwork)
 
         XCTAssertEqual(store.channelArtworkURL(for: channel.id)?.lastPathComponent, "newer.jpg")
+    }
+
+    func test_regenerateFeed_migratesLegacyEpisodeArtworkIntoFeedAssets() throws {
+        let channel = makeChannel(name: "Science Weekly")
+        let relativePath = Paths.relativeEpisodePath(forFileName: "episode.mp3", in: channel)
+        _ = try createDownloadedEpisodeFile(named: relativePath)
+        let legacyArtworkURL = Paths.legacyArtworkURL(forEpisodeFileName: relativePath, in: tempDir)
+        try FileManager.default.createDirectory(
+            at: legacyArtworkURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("legacy".utf8).write(to: legacyArtworkURL)
+        let episode = makeEpisode(channelID: channel.id, videoID: "episode123", fileName: relativePath)
+        store.channels = [channel]
+        store.episodes = [episode]
+
+        store.regenerateFeed()
+
+        let canonicalArtworkURL = Paths.feedArtworkURL(forVideoID: "episode123", in: tempDir)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: canonicalArtworkURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyArtworkURL.path))
     }
 
     // MARK: - feedURL
@@ -922,8 +943,9 @@ final class StoreTests: XCTestCase {
 
         let channelDir = Paths.ensureManagedChannelEpisodesDirectory(for: channel, in: customOutputDir)
         let audioFile = Paths.episodeFileURL(forRelativePath: relativePath, in: customOutputDir)
-        let artworkFile = Paths.artworkURL(forEpisodeFileName: relativePath, in: customOutputDir)
+        let artworkFile = Paths.feedArtworkURL(forVideoID: downloadedEpisode.videoID, in: customOutputDir)
         try Data("audio".utf8).write(to: audioFile)
+        try FileManager.default.createDirectory(at: artworkFile.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("art".utf8).write(to: artworkFile)
 
         await store.resetToDefaults()

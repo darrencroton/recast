@@ -233,10 +233,10 @@ final class FeedGeneratorTests: XCTestCase {
         XCTAssertTrue(try feedContent().contains("https://www.youtube.com/watch?v=abc456"))
     }
 
-    func test_write_includesItemArtworkWhenSidecarExists() throws {
+    func test_write_includesItemArtworkWhenFeedArtworkExists() throws {
         let channel = makeChannel()
         let ep = makeEpisode(channelID: channel.id, videoID: "art001", fileName: "art001.mp3")
-        let artworkURL = Paths.artworkURL(forEpisodeFileName: "art001.mp3", in: tempDir)
+        let artworkURL = Paths.feedArtworkURL(forVideoID: ep.videoID, in: tempDir)
         try FileManager.default.createDirectory(at: artworkURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("jpg".utf8).write(to: artworkURL)
 
@@ -245,11 +245,11 @@ final class FeedGeneratorTests: XCTestCase {
         XCTAssertTrue(try feedContent().contains("<itunes:image href=\"http://localhost:8888/feed-assets/art001.jpg\"/>"))
     }
 
-    func test_write_includesItemArtworkWhenSidecarExistsInChannelFolder() throws {
+    func test_write_includesItemArtworkWhenFeedArtworkExistsForNestedEpisode() throws {
         let channel = makeChannel(name: "Science Weekly")
         let relativePath = Paths.relativeEpisodePath(forFileName: "art001.mp3", in: channel)
         let ep = makeEpisode(channelID: channel.id, videoID: "art001", fileName: relativePath)
-        let artworkURL = Paths.artworkURL(forEpisodeFileName: relativePath, in: tempDir)
+        let artworkURL = Paths.feedArtworkURL(forVideoID: ep.videoID, in: tempDir)
         try FileManager.default.createDirectory(at: artworkURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("jpg".utf8).write(to: artworkURL)
 
@@ -259,7 +259,7 @@ final class FeedGeneratorTests: XCTestCase {
         XCTAssertTrue(try feedContent().contains("<itunes:image href=\"\(expectedURL)\"/>"))
     }
 
-    func test_write_omitsItemArtworkWhenSidecarMissing() throws {
+    func test_write_omitsItemArtworkWhenFeedArtworkMissing() throws {
         let channel = makeChannel()
         let ep = makeEpisode(channelID: channel.id, videoID: "noart001", fileName: "noart001.mp3")
 
