@@ -140,29 +140,29 @@ final class FeedGeneratorTests: XCTestCase {
 
     func test_write_createsFeedXMLFile() {
         let channel = makeChannel()
-        FeedGenerator.write(episodes: [], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
+        FeedGenerator.write(episodes: [], channels: [channel], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
         XCTAssertTrue(FileManager.default.fileExists(atPath: tempDir.appendingPathComponent("feed.xml").path))
     }
 
     func test_write_validXMLDeclaration() throws {
-        FeedGenerator.write(episodes: [], channels: [makeChannel()], baseURL: "http://localhost:8888", to: tempDir)
+        FeedGenerator.write(episodes: [], channels: [makeChannel()], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
         XCTAssertTrue(try feedContent().hasPrefix("<?xml version=\"1.0\" encoding=\"UTF-8\"?>"))
     }
 
     func test_write_containsRSSRoot() throws {
-        FeedGenerator.write(episodes: [], channels: [makeChannel()], baseURL: "http://localhost:8888", to: tempDir)
+        FeedGenerator.write(episodes: [], channels: [makeChannel()], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
         let content = try feedContent()
         XCTAssertTrue(content.contains("<rss version=\"2.0\""))
         XCTAssertTrue(content.contains("</rss>"))
     }
 
     func test_write_containsiTunesNamespace() throws {
-        FeedGenerator.write(episodes: [], channels: [makeChannel()], baseURL: "http://localhost:8888", to: tempDir)
+        FeedGenerator.write(episodes: [], channels: [makeChannel()], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
         XCTAssertTrue(try feedContent().contains("xmlns:itunes"))
     }
 
     func test_write_includesManagedFeedMarker() throws {
-        FeedGenerator.write(episodes: [], channels: [makeChannel()], baseURL: "http://localhost:8888", to: tempDir)
+        FeedGenerator.write(episodes: [], channels: [makeChannel()], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
         XCTAssertTrue(try feedContent().contains(FeedGenerator.managedFeedMarker))
     }
 
@@ -171,7 +171,7 @@ final class FeedGeneratorTests: XCTestCase {
     func test_write_includesEpisodeWithFileName() throws {
         let channel = makeChannel()
         let ep = makeEpisode(channelID: channel.id, videoID: "vid001", title: "My Talk", fileName: "vid001.mp3")
-        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
+        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
         let content = try feedContent()
         XCTAssertTrue(content.contains("My Talk"))
         XCTAssertTrue(content.contains("vid001"))
@@ -180,7 +180,7 @@ final class FeedGeneratorTests: XCTestCase {
     func test_write_excludesEpisodeWithNilFileName() throws {
         let channel = makeChannel()
         let ep = makeEpisode(channelID: channel.id, videoID: "skipped99", title: "Not Downloaded", fileName: nil)
-        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
+        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
         let content = try feedContent()
         XCTAssertFalse(content.contains("Not Downloaded"))
         XCTAssertFalse(content.contains("skipped99"))
@@ -190,7 +190,7 @@ final class FeedGeneratorTests: XCTestCase {
         let channel = makeChannel()
         let downloaded = makeEpisode(channelID: channel.id, videoID: "d001", title: "Downloaded", fileName: "d001.mp3")
         let pending = makeEpisode(channelID: channel.id, videoID: "p001", title: "Pending", fileName: nil)
-        FeedGenerator.write(episodes: [downloaded, pending], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
+        FeedGenerator.write(episodes: [downloaded, pending], channels: [channel], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
         let content = try feedContent()
         XCTAssertTrue(content.contains("Downloaded"))
         XCTAssertFalse(content.contains("Pending"))
@@ -201,7 +201,7 @@ final class FeedGeneratorTests: XCTestCase {
     func test_write_enclosureURLUsesBaseURLAndFileName() throws {
         let channel = makeChannel()
         let ep = makeEpisode(channelID: channel.id, videoID: "vid003", title: "Test", fileName: "vid003.mp3")
-        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:9999", to: tempDir)
+        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:9999", episodesDirectory: tempDir, to: tempDir)
         XCTAssertTrue(try feedContent().contains("http://localhost:9999/feed-assets/vid003.mp3"))
     }
 
@@ -213,7 +213,7 @@ final class FeedGeneratorTests: XCTestCase {
         try FileManager.default.createDirectory(at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("mp3".utf8).write(to: fileURL)
 
-        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:9999", to: tempDir)
+        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:9999", episodesDirectory: tempDir, to: tempDir)
 
         let expectedURL = "http://localhost:9999/feed-assets/vid003.mp3"
         XCTAssertTrue(try feedContent().contains(expectedURL))
@@ -222,14 +222,14 @@ final class FeedGeneratorTests: XCTestCase {
     func test_write_guidIsVideoID() throws {
         let channel = makeChannel()
         let ep = makeEpisode(channelID: channel.id, videoID: "uniqueGUID99", fileName: "uniqueGUID99.mp3")
-        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
+        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
         XCTAssertTrue(try feedContent().contains("<guid isPermaLink=\"false\">uniqueGUID99</guid>"))
     }
 
     func test_write_youTubeLinkPresentForEpisode() throws {
         let channel = makeChannel()
         let ep = makeEpisode(channelID: channel.id, videoID: "abc456", fileName: "abc456.mp3")
-        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
+        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
         XCTAssertTrue(try feedContent().contains("https://www.youtube.com/watch?v=abc456"))
     }
 
@@ -240,7 +240,7 @@ final class FeedGeneratorTests: XCTestCase {
         try FileManager.default.createDirectory(at: artworkURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("jpg".utf8).write(to: artworkURL)
 
-        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
+        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
 
         XCTAssertTrue(try feedContent().contains("<itunes:image href=\"http://localhost:8888/feed-assets/art001.jpg\"/>"))
     }
@@ -253,7 +253,7 @@ final class FeedGeneratorTests: XCTestCase {
         try FileManager.default.createDirectory(at: artworkURL.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("jpg".utf8).write(to: artworkURL)
 
-        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
+        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
 
         let expectedURL = "http://localhost:8888/feed-assets/art001.jpg"
         XCTAssertTrue(try feedContent().contains("<itunes:image href=\"\(expectedURL)\"/>"))
@@ -263,7 +263,7 @@ final class FeedGeneratorTests: XCTestCase {
         let channel = makeChannel()
         let ep = makeEpisode(channelID: channel.id, videoID: "noart001", fileName: "noart001.mp3")
 
-        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
+        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
 
         XCTAssertFalse(try feedContent().contains("<itunes:image"))
     }
@@ -273,7 +273,7 @@ final class FeedGeneratorTests: XCTestCase {
     func test_write_escapesAmpersandInTitle() throws {
         let channel = makeChannel()
         let ep = makeEpisode(channelID: channel.id, videoID: "v1", title: "Science & Nature", fileName: "v1.mp3")
-        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
+        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
         let content = try feedContent()
         XCTAssertTrue(content.contains("Science &amp; Nature"))
         XCTAssertFalse(content.contains("<title>Science & Nature<"))
@@ -282,14 +282,14 @@ final class FeedGeneratorTests: XCTestCase {
     func test_write_escapesAngleBracketsInTitle() throws {
         let channel = makeChannel()
         let ep = makeEpisode(channelID: channel.id, videoID: "v2", title: "Talk: <AI> Systems", fileName: "v2.mp3")
-        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
+        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
         let content = try feedContent()
         XCTAssertTrue(content.contains("Talk: &lt;AI&gt; Systems"))
     }
 
     func test_write_escapesSpecialCharsInChannelName() throws {
         let channel = makeChannel(name: "Channel & \"More\"")
-        FeedGenerator.write(episodes: [], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
+        FeedGenerator.write(episodes: [], channels: [channel], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
         let content = try feedContent()
         XCTAssertTrue(content.contains("Channel &amp; &quot;More&quot;"))
     }
@@ -299,13 +299,13 @@ final class FeedGeneratorTests: XCTestCase {
     func test_write_channelNameAppearsInFeed() throws {
         let channel = makeChannel(name: "Science Weekly")
         let ep = makeEpisode(channelID: channel.id, fileName: "v.mp3")
-        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
+        FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
         XCTAssertTrue(try feedContent().contains("Science Weekly"))
     }
 
     func test_write_atomSelfLinkUsesBaseURL() throws {
         let channel = makeChannel()
-        FeedGenerator.write(episodes: [], channels: [channel], baseURL: "http://localhost:1234", to: tempDir)
+        FeedGenerator.write(episodes: [], channels: [channel], baseURL: "http://localhost:1234", episodesDirectory: tempDir, to: tempDir)
         XCTAssertTrue(try feedContent().contains("http://localhost:1234/feed.xml"))
     }
 
@@ -313,7 +313,7 @@ final class FeedGeneratorTests: XCTestCase {
         let channel = makeChannel()
         try Data("png".utf8).write(to: Paths.showArtworkURL(in: tempDir))
 
-        FeedGenerator.write(episodes: [], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
+        FeedGenerator.write(episodes: [], channels: [channel], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
 
         let content = try feedContent()
         XCTAssertTrue(content.contains("<itunes:image href=\"http://localhost:8888/show-cover.jpg\"/>"))
@@ -328,7 +328,7 @@ final class FeedGeneratorTests: XCTestCase {
         let channel = makeChannel()
         let first = makeEpisode(channelID: channel.id, videoID: "first", title: "First", fileName: "first.mp3", daysAgo: 1)
         let second = makeEpisode(channelID: channel.id, videoID: "second", title: "Second", fileName: "second.mp3", daysAgo: 10)
-        FeedGenerator.write(episodes: [first, second], channels: [channel], baseURL: "http://localhost:8888", to: tempDir)
+        FeedGenerator.write(episodes: [first, second], channels: [channel], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
         let content = try feedContent()
         let firstRange = content.range(of: "first")!
         let secondRange = content.range(of: "second")!
@@ -338,7 +338,7 @@ final class FeedGeneratorTests: XCTestCase {
     // MARK: - write(): empty inputs
 
     func test_write_emptyEpisodes_producesValidFeed() throws {
-        FeedGenerator.write(episodes: [], channels: [makeChannel()], baseURL: "http://localhost:8888", to: tempDir)
+        FeedGenerator.write(episodes: [], channels: [makeChannel()], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
         let content = try feedContent()
         XCTAssertTrue(content.contains("<channel>"))
         XCTAssertFalse(content.contains("<item>"))

@@ -5,6 +5,7 @@ enum Paths {
     static let managedEpisodesMarkerFileName = ".recast-owned"
     static let showArtworkFileName = "show-cover.jpg"
     static let feedAssetsDirectoryName = "feed-assets"
+    static let serverDirectoryName = "server"
 
     static var appSupport: URL {
         let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -33,30 +34,36 @@ enum Paths {
         logsDir.appendingPathComponent("recast.log")
     }
 
-    static var defaultOutputDir: URL {
+    static var defaultEpisodesDir: URL {
         let music = fm.urls(for: .musicDirectory, in: .userDomainMask).first
             ?? fm.homeDirectoryForCurrentUser.appendingPathComponent("Music")
         return music.appendingPathComponent("Recast", isDirectory: true)
     }
 
-    static func episodesDirectoryURL(in outputDir: URL) -> URL {
-        outputDir.appendingPathComponent("episodes", isDirectory: true)
-    }
-
-    static func episodesDir(in outputDir: URL) -> URL {
-        let dir = episodesDirectoryURL(in: outputDir)
+    static func serverDirectory(in appSupportDir: URL) -> URL {
+        let dir = appSupportDir.appendingPathComponent(serverDirectoryName, isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
 
-    static func managedEpisodesMarker(in outputDir: URL) -> URL {
-        episodesDirectoryURL(in: outputDir)
+    static func episodesDirectoryURL(in episodesDir: URL) -> URL {
+        episodesDir
+    }
+
+    static func episodesDir(in episodesDir: URL) -> URL {
+        let dir = episodesDirectoryURL(in: episodesDir)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    static func managedEpisodesMarker(in episodesDir: URL) -> URL {
+        episodesDirectoryURL(in: episodesDir)
             .appendingPathComponent(managedEpisodesMarkerFileName)
     }
 
-    static func ensureManagedEpisodesDirectory(in outputDir: URL) -> URL {
-        let dir = episodesDir(in: outputDir)
-        let marker = managedEpisodesMarker(in: outputDir)
+    static func ensureManagedEpisodesDirectory(in episodesDir: URL) -> URL {
+        let dir = self.episodesDir(in: episodesDir)
+        let marker = managedEpisodesMarker(in: episodesDir)
         if !fm.fileExists(atPath: marker.path) {
             fm.createFile(atPath: marker.path, contents: Data())
         }
@@ -69,14 +76,14 @@ enum Paths {
         return "\(readableName) [\(idSuffix)]"
     }
 
-    static func channelEpisodesDir(for channel: Channel, in outputDir: URL) -> URL {
-        episodesDirectoryURL(in: outputDir)
+    static func channelEpisodesDir(for channel: Channel, in episodesDir: URL) -> URL {
+        episodesDirectoryURL(in: episodesDir)
             .appendingPathComponent(channelDirectoryName(for: channel), isDirectory: true)
     }
 
-    static func ensureManagedChannelEpisodesDirectory(for channel: Channel, in outputDir: URL) -> URL {
-        _ = ensureManagedEpisodesDirectory(in: outputDir)
-        let dir = channelEpisodesDir(for: channel, in: outputDir)
+    static func ensureManagedChannelEpisodesDirectory(for channel: Channel, in episodesDir: URL) -> URL {
+        _ = ensureManagedEpisodesDirectory(in: episodesDir)
+        let dir = channelEpisodesDir(for: channel, in: episodesDir)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
@@ -88,27 +95,31 @@ enum Paths {
             .path
     }
 
-    static func episodeFileURL(forRelativePath relativePath: String, in outputDir: URL) -> URL {
-        episodesDirectoryURL(in: outputDir).appendingPathComponent(relativePath)
+    static func episodeFileURL(forRelativePath relativePath: String, in episodesDir: URL) -> URL {
+        episodesDirectoryURL(in: episodesDir).appendingPathComponent(relativePath)
     }
 
-    static func legacyArtworkURL(forEpisodeFileName fileName: String, in outputDir: URL) -> URL {
+    static func legacyArtworkURL(forEpisodeFileName fileName: String, in episodesDir: URL) -> URL {
         episodeFileURL(
             forRelativePath: Episode.artworkFileName(forEpisodeFileName: fileName),
-            in: outputDir
+            in: episodesDir
         )
     }
 
-    static func showArtworkURL(in outputDir: URL) -> URL {
-        outputDir.appendingPathComponent(showArtworkFileName)
+    static func feedFileURL(in feedDir: URL) -> URL {
+        feedDir.appendingPathComponent("feed.xml")
     }
 
-    static func feedAssetsDirectoryURL(in outputDir: URL) -> URL {
-        outputDir.appendingPathComponent(feedAssetsDirectoryName, isDirectory: true)
+    static func showArtworkURL(in feedDir: URL) -> URL {
+        feedDir.appendingPathComponent(showArtworkFileName)
     }
 
-    static func ensureFeedAssetsDirectory(in outputDir: URL) -> URL {
-        let dir = feedAssetsDirectoryURL(in: outputDir)
+    static func feedAssetsDirectoryURL(in feedDir: URL) -> URL {
+        feedDir.appendingPathComponent(feedAssetsDirectoryName, isDirectory: true)
+    }
+
+    static func ensureFeedAssetsDirectory(in feedDir: URL) -> URL {
+        let dir = feedAssetsDirectoryURL(in: feedDir)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir
     }
@@ -121,12 +132,12 @@ enum Paths {
         "\(videoID).jpg"
     }
 
-    static func feedAudioURL(forVideoID videoID: String, in outputDir: URL) -> URL {
-        feedAssetsDirectoryURL(in: outputDir).appendingPathComponent(feedAudioFileName(forVideoID: videoID))
+    static func feedAudioURL(forVideoID videoID: String, in feedDir: URL) -> URL {
+        feedAssetsDirectoryURL(in: feedDir).appendingPathComponent(feedAudioFileName(forVideoID: videoID))
     }
 
-    static func feedArtworkURL(forVideoID videoID: String, in outputDir: URL) -> URL {
-        feedAssetsDirectoryURL(in: outputDir).appendingPathComponent(feedArtworkFileName(forVideoID: videoID))
+    static func feedArtworkURL(forVideoID videoID: String, in feedDir: URL) -> URL {
+        feedAssetsDirectoryURL(in: feedDir).appendingPathComponent(feedArtworkFileName(forVideoID: videoID))
     }
 
     static var ytDlpInBin: URL {

@@ -56,12 +56,12 @@ You can also copy the feed URL shown in Settings or the status bar.
 
 Open **Recast > Settings** (Cmd+,) to configure:
 
-- **Episodes folder** — where MP3s and the feed are stored (default: `~/Music/Recast`)
+- **Episodes folder** — where downloaded MP3s are stored (default: `~/Music/Recast`). Recast writes channel folders directly inside the selected folder. Feed/server files, state, logs, and installed tools stay under `~/Library/Application Support/Recast/`.
 - **Address** — host and port for the podcast server (default: auto-detected local IP, port 8888). Set a custom host (e.g. a Tailscale IP) to reach the server from outside your local network.
 - **Auto-start server** — launch the podcast server when the app opens
 - **Auto-fetch interval** — check for new episodes on a schedule
 - **Dependency status** — confirms `yt-dlp` and `ffmpeg` are installed
-- **Reset App to Defaults** — clears saved sources, episode state, Recast-managed downloads and feeds, and installed tools (diagnostic logs are kept)
+- **Reset App to Defaults** — clears saved sources, episode state, Recast-managed downloads, generated feeds, and installed tools (diagnostic logs are kept)
 
 ## Running Tests
 

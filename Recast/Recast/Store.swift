@@ -29,7 +29,7 @@ final class AppStore {
 
     var channels: [Channel] = []
     var episodes: [Episode] = []
-    var outputDirectory: URL
+    var episodesDirectory: URL
     var serverPort: Int = 8888
     var serverHost: String = ""   // empty = auto-detect from network interfaces
     var isServerRunning = false
@@ -55,25 +55,29 @@ final class AppStore {
     private var server: PodcastServer?
     private var autoFetchTimer: Timer?
     private let appSupportURL: URL
-    private let defaultOutputDirectory: URL
+    private let defaultEpisodesDirectory: URL
     private let stateFileURL: URL
     private var cancelAllDownloadsRequested = false
     private var operationGeneration: UInt64 = 0
+
+    private var feedDirectory: URL {
+        Paths.serverDirectory(in: appSupportURL)
+    }
 
     // MARK: - Init
 
     init(
         stateFileURL: URL = Paths.stateFile,
         appSupportURL: URL = Paths.appSupport,
-        defaultOutputDirectory: URL = Paths.defaultOutputDir,
+        defaultEpisodesDirectory: URL = Paths.defaultEpisodesDir,
         shouldLoadPersistentState: Bool = true,
         autoCheckDependencies: Bool = true,
         openURLInDefaultApp: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) },
         revealURLsInFinder: @escaping ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) }
     ) {
-        self.outputDirectory = defaultOutputDirectory
+        self.episodesDirectory = defaultEpisodesDirectory
         self.appSupportURL = appSupportURL
-        self.defaultOutputDirectory = defaultOutputDirectory
+        self.defaultEpisodesDirectory = defaultEpisodesDirectory
         self.stateFileURL = stateFileURL
         self.openURLInDefaultApp = openURLInDefaultApp
         self.revealURLsInFinder = revealURLsInFinder
@@ -91,7 +95,8 @@ final class AppStore {
     private struct PersistentState: Codable {
         var channels: [Channel]
         var episodes: [Episode]
-        var outputDirectory: String
+        var episodesDirectory: String?
+        var outputDirectory: String?
         var serverPort: Int
         var serverHost: String?
         var autoFetchInterval: Int?
@@ -102,7 +107,8 @@ final class AppStore {
         let state = PersistentState(
             channels: channels,
             episodes: episodes,
-            outputDirectory: outputDirectory.path,
+            episodesDirectory: episodesDirectory.path,
+            outputDirectory: nil,
             serverPort: serverPort,
             serverHost: serverHost.isEmpty ? nil : serverHost,
             autoFetchInterval: autoFetchInterval,
@@ -117,7 +123,7 @@ final class AppStore {
                 )
                 try data.write(to: stateFileURL)
                 AppLogger.info(
-                    "Saved state with \(channels.count) channel(s), \(episodes.count) episode(s), output dir \(outputDirectory.path)",
+                    "Saved state with \(channels.count) channel(s), \(episodes.count) episode(s), episodes dir \(episodesDirectory.path)",
                     category: "store"
                 )
             } catch {
@@ -137,33 +143,48 @@ final class AppStore {
         }
         channels = state.channels
         episodes = state.episodes
-        outputDirectory = sanitizedOutputDirectory(URL(fileURLWithPath: state.outputDirectory))
+        let legacyOutputDirectory = state.outputDirectory.map { URL(fileURLWithPath: $0) }
+        let loadedEpisodesDirectory = state.episodesDirectory.map { URL(fileURLWithPath: $0) }
+        let resolvedStorage = resolvedStorageDirectories(
+            loadedEpisodesDirectory: loadedEpisodesDirectory,
+            legacyOutputDirectory: legacyOutputDirectory
+        )
+        episodesDirectory = sanitizedEpisodesDirectory(resolvedStorage.episodesDirectory)
         serverPort = sanitizedServerPort(state.serverPort)
         serverHost = sanitizedServerHost(state.serverHost ?? Self.defaultServerHost)
         autoFetchInterval = state.autoFetchInterval ?? 0
         autoStartServer = state.autoStartServer ?? false
 
         let didPruneEpisodes = pruneEpisodesWithoutChannels()
-        let loadedOutputDirectory = URL(fileURLWithPath: state.outputDirectory)
-        let didResetOutputDirectory = outputDirectory.standardizedFileURL != loadedOutputDirectory.standardizedFileURL
+        let didResetEpisodesDirectory = episodesDirectory.standardizedFileURL != resolvedStorage.episodesDirectory.standardizedFileURL
+        let didMigrateStorageLayout = resolvedStorage.didMigrateLegacyStorageLayout
 
         AppLogger.info(
-            "Loaded state with \(channels.count) channel(s), \(episodes.count) valid episode(s), output dir \(outputDirectory.path)",
+            "Loaded state with \(channels.count) channel(s), \(episodes.count) valid episode(s), episodes dir \(episodesDirectory.path)",
             category: "store"
         )
 
-        if didPruneEpisodes || didResetOutputDirectory {
+        if let legacyFeedRoot = resolvedStorage.legacyFeedRoot {
+            migrateLegacyManagedFeedArtifacts(from: legacyFeedRoot)
+        }
+
+        if didPruneEpisodes || didResetEpisodesDirectory || didMigrateStorageLayout {
             if didPruneEpisodes {
                 AppLogger.warning("Pruned orphaned episodes that no longer matched any saved channel", category: "store")
             }
-            if didResetOutputDirectory {
+            if didResetEpisodesDirectory {
                 AppLogger.warning(
-                    "Reset missing temporary output directory \(loadedOutputDirectory.path) to \(outputDirectory.path)",
+                    "Reset missing temporary episodes directory \(resolvedStorage.episodesDirectory.path) to \(episodesDirectory.path)",
                     category: "store"
                 )
             }
+            if didMigrateStorageLayout {
+                AppLogger.info("Migrated legacy storage layout to direct episode folders", category: "store")
+            }
             save()
         }
+
+        regenerateFeed()
     }
 
     // MARK: - Lifecycle (called from RecastApp.onAppear)
@@ -412,7 +433,7 @@ final class AppStore {
             AppLogger.error("Download failed for \(episode.videoID): missing channel \(episode.channelID)", category: "download")
             return
         }
-        let episodesDir = Paths.ensureManagedChannelEpisodesDirectory(for: channel, in: outputDirectory)
+        let episodesDir = Paths.ensureManagedChannelEpisodesDirectory(for: channel, in: episodesDirectory)
         let videoID = episode.videoID
 
         activeDownloads.insert(videoID)
@@ -517,8 +538,8 @@ final class AppStore {
     func deleteEpisodes(_ ids: Set<UUID>) {
         AppLogger.info("Deleting \(ids.count) episode(s)", category: "episodes")
         let targetEpisodes = episodes.filter { ids.contains($0.id) }
-        let episodesDir = Paths.episodesDirectoryURL(in: outputDirectory)
-        removeManagedEpisodeArtifacts(for: targetEpisodes, channels: channels, in: outputDirectory)
+        let episodesDir = Paths.episodesDirectoryURL(in: episodesDirectory)
+        removeManagedEpisodeArtifacts(for: targetEpisodes, channels: channels, in: episodesDirectory)
         removeManagedEpisodesDirectoryIfEmptyAndOwned(at: episodesDir)
         episodes.removeAll { ids.contains($0.id) }
         pruneEmptySingleEpisodeSources()
@@ -539,7 +560,7 @@ final class AppStore {
 
     func downloadedEpisodeFileURL(for episode: Episode) -> URL? {
         guard let fileName = episode.fileName else { return nil }
-        let fileURL = Paths.episodeFileURL(forRelativePath: fileName, in: outputDirectory)
+        let fileURL = Paths.episodeFileURL(forRelativePath: fileName, in: episodesDirectory)
         guard FileManager.default.fileExists(atPath: fileURL.path) else { return nil }
         return fileURL
     }
@@ -602,7 +623,7 @@ final class AppStore {
 
     func artworkURL(for episode: Episode) -> URL? {
         guard episode.fileName != nil else { return nil }
-        let artworkURL = Paths.feedArtworkURL(forVideoID: episode.videoID, in: outputDirectory)
+        let artworkURL = Paths.feedArtworkURL(forVideoID: episode.videoID, in: feedDirectory)
         guard FileManager.default.fileExists(atPath: artworkURL.path) else { return nil }
         return artworkURL
     }
@@ -627,14 +648,19 @@ final class AppStore {
         let downloaded = sortEpisodesNewestFirst(validEpisodes.filter(\.isDownloaded))
         migrateLegacyEpisodeArtwork(downloaded)
         normalizeDownloadedEpisodeArtwork(downloaded)
-        ShowArtwork.ensureExists(in: outputDirectory)
-        FeedAssetLinks.sync(downloadedEpisodes: downloaded, in: outputDirectory)
+        ShowArtwork.ensureExists(in: feedDirectory)
+        FeedAssetLinks.sync(
+            downloadedEpisodes: downloaded,
+            episodesDirectory: episodesDirectory,
+            feedDirectory: feedDirectory
+        )
         AppLogger.info("Regenerating feed with \(downloaded.count) downloaded episode(s) at \(baseURL)", category: "feed")
         FeedGenerator.write(
             episodes: downloaded,
             channels: channels,
             baseURL: baseURL,
-            to: outputDirectory
+            episodesDirectory: episodesDirectory,
+            to: feedDirectory
         )
     }
 
@@ -677,12 +703,12 @@ final class AppStore {
     func startServer() {
         guard !isServerRunning else { return }
         regenerateFeed()
-        server = PodcastServer(port: UInt16(serverPort), rootDir: outputDirectory)
+        server = PodcastServer(port: UInt16(serverPort), rootDir: feedDirectory)
         do {
             try server?.start()
             isServerRunning = true
             statusMessage = "Server running on port \(serverPort)"
-            AppLogger.info("Started server on port \(serverPort) serving \(outputDirectory.path)", category: "server")
+            AppLogger.info("Started server on port \(serverPort) serving \(feedDirectory.path)", category: "server")
         } catch {
             statusMessage = "Server failed: \(error.localizedDescription)"
             AppLogger.error("Failed to start server on port \(serverPort): \(error.localizedDescription)", category: "server")
@@ -911,14 +937,16 @@ final class AppStore {
         server = nil
         isServerRunning = false
 
-        let previousOutputDirectory = outputDirectory
+        let previousEpisodesDirectory = episodesDirectory
         let previousEpisodes = episodes
-        removeManagedOutputArtifacts(at: previousOutputDirectory, episodes: previousEpisodes)
+        removeManagedEpisodeArtifacts(for: previousEpisodes, channels: channels, in: previousEpisodesDirectory)
+        removeManagedEpisodesDirectoryIfEmptyAndOwned(at: Paths.episodesDirectoryURL(in: previousEpisodesDirectory))
+        removeManagedFeedArtifacts(in: feedDirectory)
         removeManagedAppSupportArtifacts(removeStateFile: true)
 
         channels.removeAll()
         episodes.removeAll()
-        outputDirectory = defaultOutputDirectory
+        episodesDirectory = defaultEpisodesDirectory
         serverPort = Self.defaultServerPort
         serverHost = Self.defaultServerHost
         autoFetchInterval = Self.defaultAutoFetchInterval
@@ -1060,12 +1088,114 @@ final class AppStore {
         return nil
     }
 
-    private func sanitizedOutputDirectory(_ loadedDirectory: URL) -> URL {
+    private func resolvedStorageDirectories(
+        loadedEpisodesDirectory: URL?,
+        legacyOutputDirectory: URL?
+    ) -> (episodesDirectory: URL, legacyFeedRoot: URL?, didMigrateLegacyStorageLayout: Bool) {
+        if let loadedEpisodesDirectory {
+            let didFlatten = flattenLegacyEpisodesDirectoryIfNeeded(at: loadedEpisodesDirectory)
+            let resolvedEpisodesDirectory = didFlatten
+                ? loadedEpisodesDirectory.deletingLastPathComponent()
+                : loadedEpisodesDirectory
+            let legacyFeedRoot = didFlatten ? resolvedEpisodesDirectory : nil
+            return (resolvedEpisodesDirectory, legacyFeedRoot, didFlatten)
+        }
+
+        guard let legacyOutputDirectory else {
+            return (defaultEpisodesDirectory, nil, false)
+        }
+
+        let legacyEpisodesDirectory = legacyOutputDirectory.appendingPathComponent("episodes", isDirectory: true)
+        let didFlatten = flattenLegacyEpisodesDirectoryIfNeeded(at: legacyEpisodesDirectory)
+        return (legacyOutputDirectory, legacyOutputDirectory, true)
+    }
+
+    private func flattenLegacyEpisodesDirectoryIfNeeded(at nestedEpisodesDirectory: URL) -> Bool {
+        let fileManager = FileManager.default
+        let targetRoot = nestedEpisodesDirectory.deletingLastPathComponent()
+        let markerURL = nestedEpisodesDirectory.appendingPathComponent(Paths.managedEpisodesMarkerFileName)
+
+        guard nestedEpisodesDirectory.lastPathComponent == "episodes" else { return false }
+        guard fileManager.fileExists(atPath: nestedEpisodesDirectory.path) else { return false }
+        guard fileManager.fileExists(atPath: markerURL.path) else { return false }
+        guard canFlattenLegacyEpisodesDirectory(at: nestedEpisodesDirectory, into: targetRoot) else { return false }
+
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: nestedEpisodesDirectory,
+            includingPropertiesForKeys: nil,
+            options: []
+        ) else {
+            return false
+        }
+
+        for url in contents {
+            switch url.lastPathComponent {
+            case Paths.managedEpisodesMarkerFileName:
+                let targetMarkerURL = targetRoot.appendingPathComponent(Paths.managedEpisodesMarkerFileName)
+                if !fileManager.fileExists(atPath: targetMarkerURL.path) {
+                    try? fileManager.moveItem(at: url, to: targetMarkerURL)
+                } else {
+                    try? fileManager.removeItem(at: url)
+                }
+            case ".DS_Store":
+                try? fileManager.removeItem(at: url)
+            default:
+                let targetURL = targetRoot.appendingPathComponent(url.lastPathComponent)
+                guard !fileManager.fileExists(atPath: targetURL.path) else { return false }
+                try? fileManager.moveItem(at: url, to: targetURL)
+            }
+        }
+
+        try? fileManager.removeItem(at: nestedEpisodesDirectory)
+        return true
+    }
+
+    private func canFlattenLegacyEpisodesDirectory(at nestedEpisodesDirectory: URL, into targetRoot: URL) -> Bool {
+        let fileManager = FileManager.default
+        let allowedRootEntries: Set<String> = [
+            ".DS_Store",
+            "episodes",
+            "feed.xml",
+            Paths.showArtworkFileName,
+            Paths.feedAssetsDirectoryName
+        ]
+
+        let rootContents = (try? fileManager.contentsOfDirectory(
+            at: targetRoot,
+            includingPropertiesForKeys: nil,
+            options: []
+        )) ?? []
+        guard rootContents.allSatisfy({ allowedRootEntries.contains($0.lastPathComponent) }) else {
+            return false
+        }
+
+        let nestedContents = (try? fileManager.contentsOfDirectory(
+            at: nestedEpisodesDirectory,
+            includingPropertiesForKeys: nil,
+            options: []
+        )) ?? []
+        let targetNames = Set(rootContents.map(\.lastPathComponent))
+
+        for nestedURL in nestedContents {
+            switch nestedURL.lastPathComponent {
+            case Paths.managedEpisodesMarkerFileName, ".DS_Store":
+                continue
+            default:
+                if targetNames.contains(nestedURL.lastPathComponent) {
+                    return false
+                }
+            }
+        }
+
+        return true
+    }
+
+    private func sanitizedEpisodesDirectory(_ loadedDirectory: URL) -> URL {
         let standardized = loadedDirectory.standardizedFileURL
         let temporaryRoot = FileManager.default.temporaryDirectory.standardizedFileURL.path
         let isTemporary = standardized.path.hasPrefix(temporaryRoot)
         if isTemporary {
-            return defaultOutputDirectory
+            return defaultEpisodesDirectory
         }
         return loadedDirectory
     }
@@ -1074,36 +1204,32 @@ final class AppStore {
         token == operationGeneration
     }
 
-    private func removeManagedOutputArtifacts(at outputDirectory: URL, episodes: [Episode]) {
+    private func removeManagedFeedArtifacts(in feedDirectory: URL) {
         let fileManager = FileManager.default
-        let episodesDir = Paths.episodesDirectoryURL(in: outputDirectory)
-        let feedFile = outputDirectory.appendingPathComponent("feed.xml")
+        let feedFile = Paths.feedFileURL(in: feedDirectory)
 
         if isManagedFeed(at: feedFile) {
             try? fileManager.removeItem(at: feedFile)
         }
 
-        let showArtworkURL = Paths.showArtworkURL(in: outputDirectory)
+        let showArtworkURL = Paths.showArtworkURL(in: feedDirectory)
         if fileManager.fileExists(atPath: showArtworkURL.path) {
             try? fileManager.removeItem(at: showArtworkURL)
         }
 
-        let feedAssetsDir = Paths.feedAssetsDirectoryURL(in: outputDirectory)
+        let feedAssetsDir = Paths.feedAssetsDirectoryURL(in: feedDirectory)
         if fileManager.fileExists(atPath: feedAssetsDir.path) {
             try? fileManager.removeItem(at: feedAssetsDir)
         }
-
-        removeManagedEpisodeArtifacts(for: episodes, channels: channels, in: outputDirectory)
-        removeManagedEpisodesDirectoryIfEmptyAndOwned(at: episodesDir)
     }
 
-    private func removeManagedEpisodeArtifacts(for episodes: [Episode], channels: [Channel], in outputDirectory: URL) {
+    private func removeManagedEpisodeArtifacts(for episodes: [Episode], channels: [Channel], in episodesDirectory: URL) {
         let fileManager = FileManager.default
-        let episodesDir = Paths.episodesDirectoryURL(in: outputDirectory)
+        let episodesDir = Paths.episodesDirectoryURL(in: episodesDirectory)
 
         let downloadedFileURLs = Set(
             episodes.compactMap { episode in
-                episode.fileName.map { Paths.episodeFileURL(forRelativePath: $0, in: outputDirectory) }
+                episode.fileName.map { Paths.episodeFileURL(forRelativePath: $0, in: episodesDirectory) }
             }
         )
         for fileURL in downloadedFileURLs {
@@ -1112,20 +1238,9 @@ final class AppStore {
             }
         }
 
-        let downloadedArtworkURLs = Set(
-            episodes.map { episode in
-                Paths.feedArtworkURL(forVideoID: episode.videoID, in: outputDirectory)
-            }
-        )
-        for artworkURL in downloadedArtworkURLs {
-            if fileManager.fileExists(atPath: artworkURL.path) {
-                try? fileManager.removeItem(at: artworkURL)
-            }
-        }
-
         let legacyArtworkURLs = Set(
             episodes.compactMap { episode in
-                episode.fileName.map { Paths.legacyArtworkURL(forEpisodeFileName: $0, in: outputDirectory) }
+                episode.fileName.map { Paths.legacyArtworkURL(forEpisodeFileName: $0, in: episodesDirectory) }
             }
         )
         for artworkURL in legacyArtworkURLs {
@@ -1140,7 +1255,7 @@ final class AppStore {
             let prefix = String(episode.suggestedFileName.dropLast(4))
             managedPrefixesByDirectory[episodesDir, default: []].insert(prefix)
             if let channel = channelsByID[episode.channelID] {
-                let channelDir = Paths.channelEpisodesDir(for: channel, in: outputDirectory)
+                let channelDir = Paths.channelEpisodesDir(for: channel, in: episodesDirectory)
                 managedPrefixesByDirectory[channelDir, default: []].insert(prefix)
             }
         }
@@ -1217,7 +1332,7 @@ final class AppStore {
 
     private func normalizeDownloadedEpisodeArtwork(_ downloadedEpisodes: [Episode]) {
         for episode in downloadedEpisodes {
-            let artworkURL = Paths.feedArtworkURL(forVideoID: episode.videoID, in: outputDirectory)
+            let artworkURL = Paths.feedArtworkURL(forVideoID: episode.videoID, in: feedDirectory)
             guard FileManager.default.fileExists(atPath: artworkURL.path) else { continue }
             EpisodeArtwork.ensurePodcastReady(at: artworkURL)
         }
@@ -1225,13 +1340,13 @@ final class AppStore {
 
     private func migrateLegacyEpisodeArtwork(_ downloadedEpisodes: [Episode]) {
         let fileManager = FileManager.default
-        _ = Paths.ensureFeedAssetsDirectory(in: outputDirectory)
+        _ = Paths.ensureFeedAssetsDirectory(in: feedDirectory)
 
         for episode in downloadedEpisodes {
             guard let fileName = episode.fileName else { continue }
 
-            let canonicalArtworkURL = Paths.feedArtworkURL(forVideoID: episode.videoID, in: outputDirectory)
-            let legacyArtworkURL = Paths.legacyArtworkURL(forEpisodeFileName: fileName, in: outputDirectory)
+            let canonicalArtworkURL = Paths.feedArtworkURL(forVideoID: episode.videoID, in: feedDirectory)
+            let legacyArtworkURL = Paths.legacyArtworkURL(forEpisodeFileName: fileName, in: episodesDirectory)
 
             if fileManager.fileExists(atPath: canonicalArtworkURL.path) {
                 if fileManager.fileExists(atPath: legacyArtworkURL.path) {
@@ -1258,15 +1373,62 @@ final class AppStore {
         }
     }
 
+    private func migrateLegacyManagedFeedArtifacts(from legacyOutputDirectory: URL) {
+        let fileManager = FileManager.default
+        let legacyFeedFile = legacyOutputDirectory.appendingPathComponent("feed.xml")
+        let legacyShowArtworkURL = Paths.showArtworkURL(in: legacyOutputDirectory)
+        let legacyFeedAssetsDir = Paths.feedAssetsDirectoryURL(in: legacyOutputDirectory)
+        let targetFeedDirectory = feedDirectory
+
+        if fileManager.fileExists(atPath: legacyShowArtworkURL.path) {
+            let targetShowArtworkURL = Paths.showArtworkURL(in: targetFeedDirectory)
+            if !fileManager.fileExists(atPath: targetShowArtworkURL.path) {
+                try? fileManager.copyItem(at: legacyShowArtworkURL, to: targetShowArtworkURL)
+            }
+        }
+
+        if fileManager.fileExists(atPath: legacyFeedAssetsDir.path) {
+            _ = Paths.ensureFeedAssetsDirectory(in: targetFeedDirectory)
+
+            if let legacyAssetURLs = try? fileManager.contentsOfDirectory(
+                at: legacyFeedAssetsDir,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles]
+            ) {
+                for legacyAssetURL in legacyAssetURLs where legacyAssetURL.pathExtension.lowercased() == "jpg" {
+                    let targetAssetURL = Paths.feedAssetsDirectoryURL(in: targetFeedDirectory)
+                        .appendingPathComponent(legacyAssetURL.lastPathComponent)
+                    if !fileManager.fileExists(atPath: targetAssetURL.path) {
+                        try? fileManager.copyItem(at: legacyAssetURL, to: targetAssetURL)
+                    }
+                }
+            }
+        }
+
+        if isManagedFeed(at: legacyFeedFile) {
+            try? fileManager.removeItem(at: legacyFeedFile)
+        }
+        if fileManager.fileExists(atPath: legacyShowArtworkURL.path) {
+            try? fileManager.removeItem(at: legacyShowArtworkURL)
+        }
+        if fileManager.fileExists(atPath: legacyFeedAssetsDir.path) {
+            try? fileManager.removeItem(at: legacyFeedAssetsDir)
+        }
+    }
+
     private func removeManagedAppSupportArtifacts(removeStateFile: Bool) {
         let fileManager = FileManager.default
         let binDir = appSupportURL.appendingPathComponent("bin", isDirectory: true)
+        let serverDir = Paths.serverDirectory(in: appSupportURL)
 
         if removeStateFile, fileManager.fileExists(atPath: stateFileURL.path) {
             try? fileManager.removeItem(at: stateFileURL)
         }
         if fileManager.fileExists(atPath: binDir.path) {
             try? fileManager.removeItem(at: binDir)
+        }
+        if fileManager.fileExists(atPath: serverDir.path) {
+            try? fileManager.removeItem(at: serverDir)
         }
     }
 }

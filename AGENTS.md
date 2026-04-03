@@ -45,7 +45,8 @@ recast/
 - **Server address**: `serverHost` (persisted, default empty) overrides the auto-detected local IP. `resolvedHost` returns `serverHost` if set, otherwise falls back to `localIPAddress ?? "localhost"`. All feed URLs and the generated feed XML use `resolvedHost`. This allows users to configure a Tailscale IP or other custom address.
 - State persists to `~/Library/Application Support/Recast/state.json`
 - Diagnostics log at `~/Library/Application Support/Recast/logs/recast.log`
-- Audio files saved to `~/Music/Recast/` by default, under `episodes/<Channel Name [id]>/`
+- Feed/server artifacts live under `~/Library/Application Support/Recast/server/`
+- Audio files are saved to the configured episodes folder directly, under `<Channel Name [id]>/` at that root (default root: `~/Music/Recast/`)
 
 ## Setup & Build
 

@@ -8,7 +8,11 @@ final class StoreTests: XCTestCase {
     private var tempDir: URL!
     private var tempAppSupportDir: URL!
     private var tempStateFile: URL!
-    private var defaultOutputDir: URL!
+    private var defaultEpisodesDir: URL!
+
+    private var feedDir: URL {
+        Paths.serverDirectory(in: tempAppSupportDir)
+    }
 
     // MARK: - Setup / teardown
 
@@ -20,15 +24,15 @@ final class StoreTests: XCTestCase {
         tempAppSupportDir = tempDir.appendingPathComponent("app-support", isDirectory: true)
         try! FileManager.default.createDirectory(at: tempAppSupportDir, withIntermediateDirectories: true)
         tempStateFile = tempAppSupportDir.appendingPathComponent("state.json")
-        defaultOutputDir = tempDir.appendingPathComponent("default-output", isDirectory: true)
+        defaultEpisodesDir = tempDir.appendingPathComponent("default-episodes", isDirectory: true)
         store = AppStore(
             stateFileURL: tempStateFile,
             appSupportURL: tempAppSupportDir,
-            defaultOutputDirectory: defaultOutputDir,
+            defaultEpisodesDirectory: defaultEpisodesDir,
             shouldLoadPersistentState: false,
             autoCheckDependencies: false
         )
-        store.outputDirectory = tempDir
+        store.episodesDirectory = tempDir
         store.channels = []
         store.episodes = []
     }
@@ -58,7 +62,7 @@ final class StoreTests: XCTestCase {
     }
 
     private func createDownloadedEpisodeFile(named relativePath: String) throws -> URL {
-        let fileURL = Paths.episodeFileURL(forRelativePath: relativePath, in: store.outputDirectory)
+        let fileURL = Paths.episodeFileURL(forRelativePath: relativePath, in: store.episodesDirectory)
         try FileManager.default.createDirectory(
             at: fileURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -68,7 +72,7 @@ final class StoreTests: XCTestCase {
     }
 
     private func createArtworkFile(videoID: String, width: Int, height: Int) throws -> URL {
-        let artworkURL = Paths.feedArtworkURL(forVideoID: videoID, in: store.outputDirectory)
+        let artworkURL = Paths.feedArtworkURL(forVideoID: videoID, in: feedDir)
         try FileManager.default.createDirectory(
             at: artworkURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -243,7 +247,7 @@ final class StoreTests: XCTestCase {
         store = AppStore(
             stateFileURL: tempStateFile,
             appSupportURL: tempAppSupportDir,
-            defaultOutputDirectory: defaultOutputDir,
+            defaultEpisodesDirectory: defaultEpisodesDir,
             shouldLoadPersistentState: false,
             autoCheckDependencies: false,
             openURLInDefaultApp: {
@@ -251,7 +255,7 @@ final class StoreTests: XCTestCase {
                 return true
             }
         )
-        store.outputDirectory = tempDir
+        store.episodesDirectory = tempDir
 
         let channel = makeChannel()
         let relativePath = "Channel Folder [abc12345]/test-episode.mp3"
@@ -265,22 +269,22 @@ final class StoreTests: XCTestCase {
 
     // MARK: - regenerateFeed
 
-    func test_regenerateFeed_createsFeedXMLInOutputDirectory() {
+    func test_regenerateFeed_createsFeedXMLInAppSupportServerDirectory() {
         let channel = makeChannel()
         let ep = makeEpisode(channelID: channel.id, videoID: "vid1", fileName: "vid1.mp3")
         store.channels = [channel]
         store.episodes = [ep]
         store.regenerateFeed()
-        XCTAssertTrue(FileManager.default.fileExists(atPath: tempDir.appendingPathComponent("feed.xml").path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: Paths.feedFileURL(in: feedDir).path))
     }
 
-    func test_regenerateFeed_copiesBundledShowArtworkToOutputDirectory() {
+    func test_regenerateFeed_copiesBundledShowArtworkToAppSupportServerDirectory() {
         store.channels = [makeChannel()]
         store.episodes = []
 
         store.regenerateFeed()
 
-        XCTAssertTrue(FileManager.default.fileExists(atPath: Paths.showArtworkURL(in: tempDir).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: Paths.showArtworkURL(in: feedDir).path))
     }
 
     func test_regenerateFeed_normalizesEpisodeArtworkToSquarePodcastDimensions() throws {
@@ -311,8 +315,8 @@ final class StoreTests: XCTestCase {
 
         store.regenerateFeed()
 
-        let audioAliasURL = Paths.feedAudioURL(forVideoID: "episode123", in: tempDir)
-        let artworkAliasURL = Paths.feedArtworkURL(forVideoID: "episode123", in: tempDir)
+        let audioAliasURL = Paths.feedAudioURL(forVideoID: "episode123", in: feedDir)
+        let artworkAliasURL = Paths.feedArtworkURL(forVideoID: "episode123", in: feedDir)
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: audioAliasURL.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: artworkAliasURL.path))
@@ -335,7 +339,7 @@ final class StoreTests: XCTestCase {
         store.channels = [channel]
         store.episodes = [downloaded, pending]
         store.regenerateFeed()
-        let content = try String(contentsOf: tempDir.appendingPathComponent("feed.xml"), encoding: .utf8)
+        let content = try String(contentsOf: Paths.feedFileURL(in: feedDir), encoding: .utf8)
         XCTAssertTrue(content.contains("dl1"))
         XCTAssertFalse(content.contains("pend1"))
     }
@@ -347,7 +351,7 @@ final class StoreTests: XCTestCase {
         store.channels = [channel]
         store.episodes = [older, newer]   // pass in old-first; feed should still sort newest-first
         store.regenerateFeed()
-        let content = try String(contentsOf: tempDir.appendingPathComponent("feed.xml"), encoding: .utf8)
+        let content = try String(contentsOf: Paths.feedFileURL(in: feedDir), encoding: .utf8)
         let newerRange = content.range(of: "newer")!
         let olderRange = content.range(of: "older")!
         XCTAssertTrue(newerRange.lowerBound < olderRange.lowerBound, "regenerateFeed should emit the newest episode first")
@@ -358,7 +362,7 @@ final class StoreTests: XCTestCase {
         store.channels = [makeChannel()]
         store.episodes = []
         store.regenerateFeed()
-        let content = try String(contentsOf: tempDir.appendingPathComponent("feed.xml"), encoding: .utf8)
+        let content = try String(contentsOf: Paths.feedFileURL(in: feedDir), encoding: .utf8)
         XCTAssertTrue(content.contains("9999"))
     }
 
@@ -373,7 +377,7 @@ final class StoreTests: XCTestCase {
         store.serverHost = "new.example.com"
         store.handleServerHostChange()
 
-        let content = try String(contentsOf: tempDir.appendingPathComponent("feed.xml"), encoding: .utf8)
+        let content = try String(contentsOf: Paths.feedFileURL(in: feedDir), encoding: .utf8)
         XCTAssertTrue(content.contains("http://new.example.com:8888/feed.xml"))
         XCTAssertTrue(content.contains("http://new.example.com:8888/feed-assets/vid1.mp3"))
         XCTAssertFalse(content.contains("http://old.example.com:8888"))
@@ -438,7 +442,7 @@ final class StoreTests: XCTestCase {
 
         store.regenerateFeed()
 
-        let content = try String(contentsOf: tempDir.appendingPathComponent("feed.xml"), encoding: .utf8)
+        let content = try String(contentsOf: Paths.feedFileURL(in: feedDir), encoding: .utf8)
         XCTAssertTrue(content.contains("http://[fd7a:115c:a1e0::42]:8888/feed.xml"))
         XCTAssertTrue(content.contains("http://[fd7a:115c:a1e0::42]:8888/feed-assets/vid1.mp3"))
     }
@@ -573,7 +577,7 @@ final class StoreTests: XCTestCase {
         let chID = UUID()
         let ep = makeEpisode(channelID: chID, videoID: "v1", fileName: "v1.mp3")
         store.episodes = [ep]
-        let artworkPath = Paths.feedArtworkURL(forVideoID: ep.videoID, in: tempDir)
+        let artworkPath = Paths.feedArtworkURL(forVideoID: ep.videoID, in: feedDir)
         try FileManager.default.createDirectory(at: artworkPath.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("fake".utf8).write(to: artworkPath)
 
@@ -647,8 +651,8 @@ final class StoreTests: XCTestCase {
         let newer = makeEpisode(channelID: channel.id, videoID: "newer", daysAgo: 1, fileName: "newer.mp3")
         store.channels = [channel]
         store.episodes = [older, newer]
-        let olderArtwork = Paths.feedArtworkURL(forVideoID: "older", in: tempDir)
-        let newerArtwork = Paths.feedArtworkURL(forVideoID: "newer", in: tempDir)
+        let olderArtwork = Paths.feedArtworkURL(forVideoID: "older", in: feedDir)
+        let newerArtwork = Paths.feedArtworkURL(forVideoID: "newer", in: feedDir)
         try FileManager.default.createDirectory(at: olderArtwork.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("old".utf8).write(to: olderArtwork)
         try Data("new".utf8).write(to: newerArtwork)
@@ -672,7 +676,7 @@ final class StoreTests: XCTestCase {
 
         store.regenerateFeed()
 
-        let canonicalArtworkURL = Paths.feedArtworkURL(forVideoID: "episode123", in: tempDir)
+        let canonicalArtworkURL = Paths.feedArtworkURL(forVideoID: "episode123", in: feedDir)
         XCTAssertTrue(FileManager.default.fileExists(atPath: canonicalArtworkURL.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacyArtworkURL.path))
     }
@@ -731,7 +735,7 @@ final class StoreTests: XCTestCase {
                     "isPlayed": orphanEpisode.isPlayed,
                 ],
             ],
-            "outputDirectory": tempDir.path,
+            "episodesDirectory": tempDir.path,
             "serverPort": 8888,
             "autoFetchInterval": 0,
             "autoStartServer": false,
@@ -743,7 +747,7 @@ final class StoreTests: XCTestCase {
         let loadedStore = AppStore(
             stateFileURL: tempStateFile,
             appSupportURL: tempAppSupportDir,
-            defaultOutputDirectory: defaultOutputDir,
+            defaultEpisodesDirectory: defaultEpisodesDir,
             shouldLoadPersistentState: true,
             autoCheckDependencies: false
         )
@@ -753,14 +757,14 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(loadedStore.episodes.first?.videoID, "keep")
     }
 
-    func test_load_resetsMissingTemporaryOutputDirectoryToDefault() throws {
+    func test_load_resetsMissingTemporaryEpisodesDirectoryToDefault() throws {
         let missingTempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
 
         let payload: [String: Any] = [
             "channels": [],
             "episodes": [],
-            "outputDirectory": missingTempDirectory.path,
+            "episodesDirectory": missingTempDirectory.path,
             "serverPort": 8888,
             "autoFetchInterval": 0,
             "autoStartServer": false,
@@ -772,12 +776,173 @@ final class StoreTests: XCTestCase {
         let loadedStore = AppStore(
             stateFileURL: tempStateFile,
             appSupportURL: tempAppSupportDir,
-            defaultOutputDirectory: defaultOutputDir,
+            defaultEpisodesDirectory: defaultEpisodesDir,
             shouldLoadPersistentState: true,
             autoCheckDependencies: false
         )
 
-        XCTAssertEqual(loadedStore.outputDirectory.standardizedFileURL, defaultOutputDir.standardizedFileURL)
+        XCTAssertEqual(loadedStore.episodesDirectory.standardizedFileURL, defaultEpisodesDir.standardizedFileURL)
+    }
+
+    func test_load_migratesLegacyCombinedOutputDirectoryToDirectEpisodesRoot() throws {
+        let fixtureRoot = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".recast-test-artifacts", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: fixtureRoot) }
+
+        let legacyOutputDir = fixtureRoot.appendingPathComponent("legacy-output", isDirectory: true)
+        let legacyEpisodesDir = legacyOutputDir.appendingPathComponent("episodes", isDirectory: true)
+        try FileManager.default.createDirectory(at: legacyEpisodesDir, withIntermediateDirectories: true)
+        FileManager.default.createFile(
+            atPath: legacyEpisodesDir.appendingPathComponent(Paths.managedEpisodesMarkerFileName).path,
+            contents: Data()
+        )
+
+        let payload: [String: Any] = [
+            "channels": [],
+            "episodes": [],
+            "outputDirectory": legacyOutputDir.path,
+            "serverPort": 8888,
+            "autoFetchInterval": 0,
+            "autoStartServer": false,
+        ]
+
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        try data.write(to: tempStateFile)
+
+        let loadedStore = AppStore(
+            stateFileURL: tempStateFile,
+            appSupportURL: tempAppSupportDir,
+            defaultEpisodesDirectory: defaultEpisodesDir,
+            shouldLoadPersistentState: true,
+            autoCheckDependencies: false
+        )
+
+        XCTAssertEqual(loadedStore.episodesDirectory.standardizedFileURL, legacyOutputDir.standardizedFileURL)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyEpisodesDir.path))
+    }
+
+    func test_load_flattensPreviouslyMigratedEpisodesDirectoryBackToConfiguredRoot() throws {
+        let fixtureRoot = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".recast-test-artifacts", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: fixtureRoot) }
+
+        let configuredRoot = fixtureRoot.appendingPathComponent("configured-root", isDirectory: true)
+        let nestedEpisodesDir = configuredRoot.appendingPathComponent("episodes", isDirectory: true)
+        let channelDir = nestedEpisodesDir.appendingPathComponent("Channel [abc12345]", isDirectory: true)
+        try FileManager.default.createDirectory(at: channelDir, withIntermediateDirectories: true)
+        FileManager.default.createFile(
+            atPath: nestedEpisodesDir.appendingPathComponent(Paths.managedEpisodesMarkerFileName).path,
+            contents: Data()
+        )
+
+        let payload: [String: Any] = [
+            "channels": [],
+            "episodes": [],
+            "episodesDirectory": nestedEpisodesDir.path,
+            "serverPort": 8888,
+            "autoFetchInterval": 0,
+            "autoStartServer": false,
+        ]
+
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        try data.write(to: tempStateFile)
+
+        let loadedStore = AppStore(
+            stateFileURL: tempStateFile,
+            appSupportURL: tempAppSupportDir,
+            defaultEpisodesDirectory: defaultEpisodesDir,
+            shouldLoadPersistentState: true,
+            autoCheckDependencies: false
+        )
+
+        XCTAssertEqual(loadedStore.episodesDirectory.standardizedFileURL, configuredRoot.standardizedFileURL)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: configuredRoot.appendingPathComponent("Channel [abc12345]").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: nestedEpisodesDir.path))
+    }
+
+    func test_load_migratesLegacyManagedFeedArtifactsIntoAppSupport() throws {
+        let fixtureRoot = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent(".recast-test-artifacts", isDirectory: true)
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: fixtureRoot) }
+
+        let legacyOutputDir = fixtureRoot.appendingPathComponent("legacy-output", isDirectory: true)
+        let legacyEpisodesDir = legacyOutputDir.appendingPathComponent("episodes", isDirectory: true)
+        try FileManager.default.createDirectory(at: legacyEpisodesDir, withIntermediateDirectories: true)
+        FileManager.default.createFile(
+            atPath: legacyEpisodesDir.appendingPathComponent(Paths.managedEpisodesMarkerFileName).path,
+            contents: Data()
+        )
+
+        let channel = makeChannel(name: "Science Weekly")
+        let relativePath = Paths.relativeEpisodePath(forFileName: "episode.mp3", in: channel)
+        let episodeFile = legacyEpisodesDir.appendingPathComponent(relativePath)
+        try FileManager.default.createDirectory(at: episodeFile.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("audio".utf8).write(to: episodeFile)
+
+        let legacyShowArtworkURL = Paths.showArtworkURL(in: legacyOutputDir)
+        try Data("cover".utf8).write(to: legacyShowArtworkURL)
+
+        let legacyArtworkURL = Paths.feedArtworkURL(forVideoID: "episode123", in: legacyOutputDir)
+        try FileManager.default.createDirectory(at: legacyArtworkURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("art".utf8).write(to: legacyArtworkURL)
+
+        FeedGenerator.write(
+            episodes: [makeEpisode(channelID: channel.id, videoID: "episode123", fileName: relativePath)],
+            channels: [channel],
+            baseURL: "http://localhost:8888",
+            episodesDirectory: legacyEpisodesDir,
+            to: legacyOutputDir
+        )
+
+        let payload: [String: Any] = [
+            "channels": [
+                [
+                    "id": channel.id.uuidString,
+                    "url": channel.url,
+                    "name": channel.name,
+                    "sourceKind": "collection",
+                    "dateAdded": channel.dateAdded.timeIntervalSince1970,
+                ],
+            ],
+            "episodes": [
+                [
+                    "id": UUID().uuidString,
+                    "channelID": channel.id.uuidString,
+                    "videoID": "episode123",
+                    "title": "episode123",
+                    "fileName": relativePath,
+                    "publishDate": Date().timeIntervalSince1970,
+                    "durationSeconds": 120,
+                    "isPlayed": false,
+                    "isNew": false,
+                ],
+            ],
+            "outputDirectory": legacyOutputDir.path,
+            "serverPort": 8888,
+            "autoFetchInterval": 0,
+            "autoStartServer": false,
+        ]
+
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        try data.write(to: tempStateFile)
+
+        _ = AppStore(
+            stateFileURL: tempStateFile,
+            appSupportURL: tempAppSupportDir,
+            defaultEpisodesDirectory: defaultEpisodesDir,
+            shouldLoadPersistentState: true,
+            autoCheckDependencies: false
+        )
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyOutputDir.appendingPathComponent(relativePath).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyEpisodesDir.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: Paths.showArtworkURL(in: feedDir).path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: Paths.feedArtworkURL(forVideoID: "episode123", in: feedDir).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: Paths.feedFileURL(in: legacyOutputDir).path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyShowArtworkURL.path))
     }
 
     func test_saveAndLoad_preservesServerHostAndServerPort() {
@@ -789,7 +954,7 @@ final class StoreTests: XCTestCase {
         let reloadedStore = AppStore(
             stateFileURL: tempStateFile,
             appSupportURL: tempAppSupportDir,
-            defaultOutputDirectory: defaultOutputDir,
+            defaultEpisodesDirectory: defaultEpisodesDir,
             shouldLoadPersistentState: true,
             autoCheckDependencies: false
         )
@@ -820,14 +985,14 @@ final class StoreTests: XCTestCase {
     }
 
     func test_resetToDefaults_clearsStateAndManagedArtifacts() async throws {
-        let customOutputDir = tempDir.appendingPathComponent("custom-output", isDirectory: true)
-        try FileManager.default.createDirectory(at: customOutputDir, withIntermediateDirectories: true)
+        let customEpisodesDir = tempDir.appendingPathComponent("custom-episodes", isDirectory: true)
+        try FileManager.default.createDirectory(at: customEpisodesDir, withIntermediateDirectories: true)
 
         let channel = makeChannel()
         let downloadedEpisode = makeEpisode(channelID: channel.id, videoID: "reset-me", fileName: "reset-me.mp3")
         store.channels = [channel]
         store.episodes = [downloadedEpisode]
-        store.outputDirectory = customOutputDir
+        store.episodesDirectory = customEpisodesDir
         store.serverPort = 9999
         store.autoFetchInterval = 24
         store.autoStartServer = true
@@ -835,10 +1000,10 @@ final class StoreTests: XCTestCase {
             "reset-me": DownloadStatus(progress: 0.5, phase: .convertingAudio)
         ]
 
-        let episodesDir = Paths.ensureManagedEpisodesDirectory(in: customOutputDir)
+        let episodesDir = Paths.ensureManagedEpisodesDirectory(in: customEpisodesDir)
         let audioFile = episodesDir.appendingPathComponent("reset-me.mp3")
-        let showArtworkFile = Paths.showArtworkURL(in: customOutputDir)
-        let feedAssetsDir = Paths.ensureFeedAssetsDirectory(in: customOutputDir)
+        let showArtworkFile = Paths.showArtworkURL(in: feedDir)
+        let feedAssetsDir = Paths.ensureFeedAssetsDirectory(in: feedDir)
         let feedAssetAudio = feedAssetsDir.appendingPathComponent("reset-me.mp3")
         try Data("audio".utf8).write(to: audioFile)
         try Data("cover".utf8).write(to: showArtworkFile)
@@ -847,7 +1012,8 @@ final class StoreTests: XCTestCase {
             episodes: [downloadedEpisode],
             channels: [channel],
             baseURL: "http://localhost:9999",
-            to: customOutputDir
+            episodesDirectory: customEpisodesDir,
+            to: feedDir
         )
 
         let binDir = tempAppSupportDir.appendingPathComponent("bin", isDirectory: true)
@@ -864,7 +1030,7 @@ final class StoreTests: XCTestCase {
 
         XCTAssertTrue(store.channels.isEmpty)
         XCTAssertTrue(store.episodes.isEmpty)
-        XCTAssertEqual(store.outputDirectory.standardizedFileURL, defaultOutputDir.standardizedFileURL)
+        XCTAssertEqual(store.episodesDirectory.standardizedFileURL, defaultEpisodesDir.standardizedFileURL)
         XCTAssertEqual(store.serverPort, 8888)
         XCTAssertEqual(store.autoFetchInterval, 0)
         XCTAssertFalse(store.autoStartServer)
@@ -875,7 +1041,7 @@ final class StoreTests: XCTestCase {
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: audioFile.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: episodesDir.path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: customOutputDir.appendingPathComponent("feed.xml").path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: Paths.feedFileURL(in: feedDir).path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: showArtworkFile.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: feedAssetsDir.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: binDir.path))
@@ -886,64 +1052,61 @@ final class StoreTests: XCTestCase {
         let reloadedStore = AppStore(
             stateFileURL: tempStateFile,
             appSupportURL: tempAppSupportDir,
-            defaultOutputDirectory: defaultOutputDir,
+            defaultEpisodesDirectory: defaultEpisodesDir,
             shouldLoadPersistentState: true,
             autoCheckDependencies: false
         )
 
         XCTAssertTrue(reloadedStore.channels.isEmpty)
         XCTAssertTrue(reloadedStore.episodes.isEmpty)
-        XCTAssertEqual(reloadedStore.outputDirectory.standardizedFileURL, defaultOutputDir.standardizedFileURL)
+        XCTAssertEqual(reloadedStore.episodesDirectory.standardizedFileURL, defaultEpisodesDir.standardizedFileURL)
         XCTAssertEqual(reloadedStore.serverPort, 8888)
         XCTAssertEqual(reloadedStore.autoFetchInterval, 0)
         XCTAssertFalse(reloadedStore.autoStartServer)
     }
 
-    func test_resetToDefaults_preservesUnownedOutputArtifacts() async throws {
-        let customOutputDir = tempDir.appendingPathComponent("shared-output", isDirectory: true)
-        try FileManager.default.createDirectory(at: customOutputDir, withIntermediateDirectories: true)
+    func test_resetToDefaults_preservesUnownedEpisodesDirectoryArtifacts() async throws {
+        let customEpisodesDir = tempDir.appendingPathComponent("shared-episodes", isDirectory: true)
+        try FileManager.default.createDirectory(at: customEpisodesDir, withIntermediateDirectories: true)
 
         let channel = makeChannel()
         let downloadedEpisode = makeEpisode(channelID: channel.id, videoID: "reset-me", fileName: "reset-me.mp3")
         let partialEpisode = makeEpisode(channelID: channel.id, videoID: "partial-me")
         store.channels = [channel]
         store.episodes = [downloadedEpisode, partialEpisode]
-        store.outputDirectory = customOutputDir
+        store.episodesDirectory = customEpisodesDir
 
-        let episodesDir = Paths.ensureManagedEpisodesDirectory(in: customOutputDir)
+        let episodesDir = Paths.ensureManagedEpisodesDirectory(in: customEpisodesDir)
         let managedAudioFile = episodesDir.appendingPathComponent("reset-me.mp3")
         let managedPartialFile = episodesDir.appendingPathComponent("\(String(partialEpisode.suggestedFileName.dropLast(4))).webm")
         let unrelatedAudioFile = episodesDir.appendingPathComponent("keep-me.mp3")
-        let unrelatedFeedFile = customOutputDir.appendingPathComponent("feed.xml")
 
         try Data("audio".utf8).write(to: managedAudioFile)
         try Data("partial".utf8).write(to: managedPartialFile)
         try Data("keep".utf8).write(to: unrelatedAudioFile)
-        try Data("user feed".utf8).write(to: unrelatedFeedFile)
 
         await store.resetToDefaults()
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: managedAudioFile.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: managedPartialFile.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: unrelatedAudioFile.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: unrelatedFeedFile.path))
         XCTAssertTrue(FileManager.default.fileExists(atPath: episodesDir.path))
     }
 
     func test_resetToDefaults_removesNestedManagedArtifactsAndPrunesEmptyChannelFolder() async throws {
-        let customOutputDir = tempDir.appendingPathComponent("nested-output", isDirectory: true)
-        try FileManager.default.createDirectory(at: customOutputDir, withIntermediateDirectories: true)
+        let customEpisodesDir = tempDir.appendingPathComponent("nested-episodes", isDirectory: true)
+        try FileManager.default.createDirectory(at: customEpisodesDir, withIntermediateDirectories: true)
 
         let channel = makeChannel(name: "Science Weekly")
         let relativePath = Paths.relativeEpisodePath(forFileName: "reset-me.mp3", in: channel)
         let downloadedEpisode = makeEpisode(channelID: channel.id, videoID: "reset-me", fileName: relativePath)
         store.channels = [channel]
         store.episodes = [downloadedEpisode]
-        store.outputDirectory = customOutputDir
+        store.episodesDirectory = customEpisodesDir
 
-        let channelDir = Paths.ensureManagedChannelEpisodesDirectory(for: channel, in: customOutputDir)
-        let audioFile = Paths.episodeFileURL(forRelativePath: relativePath, in: customOutputDir)
-        let artworkFile = Paths.feedArtworkURL(forVideoID: downloadedEpisode.videoID, in: customOutputDir)
+        let channelDir = Paths.ensureManagedChannelEpisodesDirectory(for: channel, in: customEpisodesDir)
+        let audioFile = Paths.episodeFileURL(forRelativePath: relativePath, in: customEpisodesDir)
+        let artworkFile = Paths.feedArtworkURL(forVideoID: downloadedEpisode.videoID, in: feedDir)
         try Data("audio".utf8).write(to: audioFile)
         try FileManager.default.createDirectory(at: artworkFile.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("art".utf8).write(to: artworkFile)

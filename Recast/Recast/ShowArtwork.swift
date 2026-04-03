@@ -5,9 +5,9 @@ enum ShowArtwork {
     private static let resourceName = "show-cover"
     private static let resourceExtension = "jpg"
 
-    static func ensureExists(in outputDir: URL) {
+    static func ensureExists(in feedDir: URL) {
         let fileManager = FileManager.default
-        let destinationURL = Paths.showArtworkURL(in: outputDir)
+        let destinationURL = Paths.showArtworkURL(in: feedDir)
 
         guard !fileManager.fileExists(atPath: destinationURL.path) else { return }
         guard let sourceURL = bundledArtworkURL() else {
@@ -16,7 +16,7 @@ enum ShowArtwork {
         }
 
         do {
-            try fileManager.createDirectory(at: outputDir, withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: feedDir, withIntermediateDirectories: true)
             try fileManager.copyItem(at: sourceURL, to: destinationURL)
         } catch {
             AppLogger.error("Failed to copy show artwork: \(error.localizedDescription)", category: "feed")
@@ -142,20 +142,20 @@ enum EpisodeArtwork {
 }
 
 enum FeedAssetLinks {
-    static func sync(downloadedEpisodes: [Episode], in outputDir: URL) {
+    static func sync(downloadedEpisodes: [Episode], episodesDirectory: URL, feedDirectory: URL) {
         let fileManager = FileManager.default
-        let feedAssetsDir = Paths.ensureFeedAssetsDirectory(in: outputDir)
+        let feedAssetsDir = Paths.ensureFeedAssetsDirectory(in: feedDirectory)
 
         var desiredPaths: Set<String> = []
         for episode in downloadedEpisodes {
             guard let fileName = episode.fileName else { continue }
 
-            let sourceAudioURL = Paths.episodeFileURL(forRelativePath: fileName, in: outputDir)
-            let targetAudioURL = Paths.feedAudioURL(forVideoID: episode.videoID, in: outputDir)
+            let sourceAudioURL = Paths.episodeFileURL(forRelativePath: fileName, in: episodesDirectory)
+            let targetAudioURL = Paths.feedAudioURL(forVideoID: episode.videoID, in: feedDirectory)
             desiredPaths.insert(targetAudioURL.standardizedFileURL.path)
             refreshAlias(at: targetAudioURL, pointingTo: sourceAudioURL)
 
-            let targetArtworkURL = Paths.feedArtworkURL(forVideoID: episode.videoID, in: outputDir)
+            let targetArtworkURL = Paths.feedArtworkURL(forVideoID: episode.videoID, in: feedDirectory)
             if fileManager.fileExists(atPath: targetArtworkURL.path) {
                 desiredPaths.insert(targetArtworkURL.standardizedFileURL.path)
             }

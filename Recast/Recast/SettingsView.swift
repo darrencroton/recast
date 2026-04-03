@@ -22,12 +22,12 @@ struct SettingsView: View {
             Section("Output") {
                 LabeledContent("Episodes folder") {
                     HStack {
-                        Text(store.outputDirectory.path)
+                        Text(store.episodesDirectory.path)
                             .font(.body)
                             .foregroundStyle(.secondary)
                             .lineLimit(1)
                             .truncationMode(.middle)
-                            .help(store.outputDirectory.path)
+                            .help(store.episodesDirectory.path)
 
                         Button("Choose…") {
                             chooseOutputDir()
@@ -123,7 +123,7 @@ struct SettingsView: View {
             }
 
             Section("Reset") {
-                Text("Remove all channels, episode history, Recast-downloaded audio, generated feeds, installed tools, and settings. Diagnostic logs are kept.")
+                Text("Remove all channels, episode history, Recast-downloaded audio, generated feed files, installed tools, and settings. Diagnostic logs are kept.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
 
@@ -159,7 +159,7 @@ struct SettingsView: View {
                 }
             }
         } message: {
-            Text("This will remove saved channels, episode state, Recast-managed downloads, generated feeds, installed tools, and custom settings. Diagnostic logs are kept.")
+            Text("This will remove saved channels, episode state, Recast-managed downloads, generated feed files, installed tools, and custom settings. Diagnostic logs are kept.")
         }
     }
 
@@ -169,9 +169,9 @@ struct SettingsView: View {
         panel.canChooseFiles = false
         panel.canCreateDirectories = true
         panel.prompt = "Select"
-        panel.message = "Choose a folder for podcast episodes and the RSS feed."
+        panel.message = "Choose the folder where Recast should store downloaded podcast episodes."
         if panel.runModal() == .OK, let url = panel.url {
-            store.outputDirectory = url
+            store.episodesDirectory = url
             store.save()
         }
     }
