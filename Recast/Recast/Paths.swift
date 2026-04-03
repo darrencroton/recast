@@ -24,6 +24,24 @@ enum Paths {
         appSupport.appendingPathComponent("state.json")
     }
 
+    // MARK: - Shared sync state (lives inside the episodes directory for cloud sync)
+
+    static let syncDirectoryName = ".recast"
+
+    static func syncDirectoryURL(in episodesDir: URL) -> URL {
+        episodesDir.appendingPathComponent(syncDirectoryName, isDirectory: true)
+    }
+
+    static func syncDirectory(in episodesDir: URL) -> URL {
+        let dir = syncDirectoryURL(in: episodesDir)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
+    }
+
+    static func sharedStateFile(in episodesDir: URL) -> URL {
+        syncDirectoryURL(in: episodesDir).appendingPathComponent("shared-state.json")
+    }
+
     static var logsDir: URL {
         let dir = appSupport.appendingPathComponent("logs", isDirectory: true)
         try? fm.createDirectory(at: dir, withIntermediateDirectories: true)

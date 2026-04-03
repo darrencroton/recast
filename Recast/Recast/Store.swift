@@ -81,7 +81,7 @@ final class AppStore {
         self.stateFileURL = stateFileURL
         self.openURLInDefaultApp = openURLInDefaultApp
         self.revealURLsInFinder = revealURLsInFinder
-        AppLogger.info("Initialising store with state file \(stateFileURL.path)", category: "store")
+        AppLogger.info("Initialising store; local state at \(stateFileURL.lastPathComponent)", category: "store")
         if shouldLoadPersistentState {
             load()
         }
@@ -92,9 +92,8 @@ final class AppStore {
 
     // MARK: - Persistence
 
-    private struct PersistentState: Codable {
-        var channels: [Channel]
-        var episodes: [Episode]
+    // Machine-specific settings: lives in Application Support, never synced.
+    private struct LocalState: Codable {
         var episodesDirectory: String?
         var serverPort: Int
         var serverHost: String?
@@ -102,69 +101,83 @@ final class AppStore {
         var autoStartServer: Bool?
     }
 
+    // Shared data: lives inside the episodes directory so cloud storage syncs it between machines.
+    private struct SharedState: Codable {
+        var channels: [Channel]
+        var episodes: [Episode]
+    }
+
     func save() {
-        let state = PersistentState(
-            channels: channels,
-            episodes: episodes,
+        // Write shared state first. If this fails (e.g. cloud folder unavailable), we leave
+        // local state pointing at the old episodes directory so the next launch can still find
+        // the previous shared state rather than loading nothing.
+        let shared = SharedState(channels: channels, episodes: episodes)
+        guard writeJSON(shared, to: Paths.sharedStateFile(in: episodesDirectory),
+                        label: "shared state (\(channels.count) channel(s), \(episodes.count) episode(s))") else {
+            return
+        }
+
+        let local = LocalState(
             episodesDirectory: episodesDirectory.path,
             serverPort: serverPort,
             serverHost: serverHost.isEmpty ? nil : serverHost,
             autoFetchInterval: autoFetchInterval,
             autoStartServer: autoStartServer
         )
-        if let data = try? JSONEncoder().encode(state) {
-            do {
-                try FileManager.default.createDirectory(
-                    at: stateFileURL.deletingLastPathComponent(),
-                    withIntermediateDirectories: true,
-                    attributes: nil
-                )
-                try data.write(to: stateFileURL)
-                AppLogger.info(
-                    "Saved state with \(channels.count) channel(s), \(episodes.count) episode(s), episodes dir \(episodesDirectory.path)",
-                    category: "store"
-                )
-            } catch {
-                AppLogger.error("Failed to save state to \(stateFileURL.path): \(error.localizedDescription)", category: "store")
-            }
-        } else {
-            AppLogger.error("Failed to encode state for \(stateFileURL.path)", category: "store")
+        writeJSON(local, to: stateFileURL, label: "local state")
+    }
+
+    @discardableResult
+    private func writeJSON<T: Encodable>(_ value: T, to url: URL, label: String) -> Bool {
+        guard let data = try? JSONEncoder().encode(value) else {
+            AppLogger.error("Failed to encode \(label)", category: "store")
+            return false
+        }
+        do {
+            try FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            try data.write(to: url, options: .atomic)
+            AppLogger.info("Saved \(label) to \(url.lastPathComponent)", category: "store")
+            return true
+        } catch {
+            AppLogger.error("Failed to write \(label) to \(url.path): \(error.localizedDescription)", category: "store")
+            return false
         }
     }
 
     func load() {
-        guard let data = try? Data(contentsOf: stateFileURL),
-              let state = try? JSONDecoder().decode(PersistentState.self, from: data)
-        else {
-            AppLogger.info("No readable persisted state at \(stateFileURL.path); starting fresh", category: "store")
-            return
-        }
-        channels = state.channels
-        episodes = state.episodes
-        let persistedEpisodesDirectory = state.episodesDirectory
-            .map { URL(fileURLWithPath: $0) }
-            ?? defaultEpisodesDirectory
-        episodesDirectory = sanitizedEpisodesDirectory(persistedEpisodesDirectory)
-        serverPort = sanitizedServerPort(state.serverPort)
-        serverHost = sanitizedServerHost(state.serverHost ?? Self.defaultServerHost)
-        autoFetchInterval = state.autoFetchInterval ?? 0
-        autoStartServer = state.autoStartServer ?? false
+        // Step 1: load machine-local settings to discover the episodes directory.
+        let local = readJSON(LocalState.self, from: stateFileURL, label: "local state")
+        let persistedEpisodesPath = local?.episodesDirectory.map { URL(fileURLWithPath: $0) } ?? defaultEpisodesDirectory
+        episodesDirectory = sanitizedEpisodesDirectory(persistedEpisodesPath)
+        serverPort = sanitizedServerPort(local?.serverPort ?? Self.defaultServerPort)
+        serverHost = sanitizedServerHost(local?.serverHost ?? Self.defaultServerHost)
+        autoFetchInterval = local?.autoFetchInterval ?? 0
+        autoStartServer = local?.autoStartServer ?? false
+
+        // Step 2: load shared channels and episodes from the (potentially cloud) episodes directory.
+        let sharedFileURL = Paths.sharedStateFile(in: episodesDirectory)
+        let shared = readJSON(SharedState.self, from: sharedFileURL, label: "shared state")
+        channels = shared?.channels ?? []
+        episodes = shared?.episodes ?? []
 
         let didPruneEpisodes = pruneEpisodesWithoutChannels()
-        let didResetEpisodesDirectory = episodesDirectory.standardizedFileURL != persistedEpisodesDirectory.standardizedFileURL
+        let didResetEpisodesDirectory = episodesDirectory.standardizedFileURL != persistedEpisodesPath.standardizedFileURL
 
         AppLogger.info(
-            "Loaded state with \(channels.count) channel(s), \(episodes.count) valid episode(s), episodes dir \(episodesDirectory.path)",
+            "Loaded \(channels.count) channel(s), \(episodes.count) valid episode(s), episodes dir \(episodesDirectory.path)",
             category: "store"
         )
 
         if didPruneEpisodes || didResetEpisodesDirectory {
             if didPruneEpisodes {
-                AppLogger.warning("Pruned orphaned episodes that no longer matched any saved channel", category: "store")
+                AppLogger.warning("Pruned orphaned episodes with no matching channel", category: "store")
             }
             if didResetEpisodesDirectory {
                 AppLogger.warning(
-                    "Reset missing temporary episodes directory \(persistedEpisodesDirectory.path) to \(episodesDirectory.path)",
+                    "Reset temporary episodes directory \(persistedEpisodesPath.path) to \(episodesDirectory.path)",
                     category: "store"
                 )
             }
@@ -172,6 +185,18 @@ final class AppStore {
         }
 
         regenerateFeed()
+    }
+
+    private func readJSON<T: Decodable>(_ type: T.Type, from url: URL, label: String) -> T? {
+        guard let data = try? Data(contentsOf: url) else {
+            AppLogger.info("No \(label) at \(url.lastPathComponent); starting fresh", category: "store")
+            return nil
+        }
+        guard let value = try? JSONDecoder().decode(type, from: data) else {
+            AppLogger.warning("Unreadable \(label) at \(url.path); starting fresh", category: "store")
+            return nil
+        }
+        return value
     }
 
     // MARK: - Lifecycle (called from RecastApp.onAppear)
@@ -927,6 +952,7 @@ final class AppStore {
         let previousEpisodesDirectory = episodesDirectory
         let previousEpisodes = episodes
         removeManagedEpisodeArtifacts(for: previousEpisodes, channels: channels, in: previousEpisodesDirectory)
+        try? FileManager.default.removeItem(at: Paths.syncDirectoryURL(in: previousEpisodesDirectory))
         removeManagedEpisodesDirectoryIfEmptyAndOwned(at: Paths.episodesDirectoryURL(in: previousEpisodesDirectory))
         removeManagedFeedArtifacts(in: feedDirectory)
         removeManagedAppSupportArtifacts(removeStateFile: true)
