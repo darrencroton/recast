@@ -108,6 +108,13 @@ final class AppStore {
     }
 
     func save() {
+        // Write shared state first. If this fails (e.g. cloud folder unavailable), we leave
+        // local state pointing at the old episodes directory so the next launch can still find
+        // the previous shared state rather than loading nothing.
+        let shared = SharedState(channels: channels, episodes: episodes)
+        writeJSON(shared, to: Paths.sharedStateFile(in: episodesDirectory),
+                  label: "shared state (\(channels.count) channel(s), \(episodes.count) episode(s))")
+
         let local = LocalState(
             episodesDirectory: episodesDirectory.path,
             serverPort: serverPort,
@@ -116,10 +123,6 @@ final class AppStore {
             autoStartServer: autoStartServer
         )
         writeJSON(local, to: stateFileURL, label: "local state")
-
-        let shared = SharedState(channels: channels, episodes: episodes)
-        let sharedFileURL = Paths.sharedStateFile(in: episodesDirectory)
-        writeJSON(shared, to: sharedFileURL, label: "shared state (\(channels.count) channel(s), \(episodes.count) episode(s))")
     }
 
     private func writeJSON<T: Encodable>(_ value: T, to url: URL, label: String) {

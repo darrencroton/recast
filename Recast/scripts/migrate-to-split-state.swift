@@ -56,7 +56,11 @@ let sharedState: [String: Any] = [
     "episodes": json["episodes"] ?? [],
 ]
 
-// MARK: - Write local state back to Application Support
+// MARK: - Write both state files
+//
+// Shared state is written first. If that step fails (e.g. the episodes directory is
+// unavailable), the script exits before touching state.json, leaving the original
+// combined file intact so no data is lost.
 
 func writeJSON(_ dict: [String: Any], to url: URL, label: String) {
     guard let data = try? JSONSerialization.data(withJSONObject: dict, options: .prettyPrinted) else {
@@ -73,13 +77,11 @@ func writeJSON(_ dict: [String: Any], to url: URL, label: String) {
     }
 }
 
-writeJSON(localState, to: stateFileURL, label: "local state")
-
-// MARK: - Write shared state into the episodes directory
-
 let syncDirURL = episodesDirURL.appendingPathComponent(".recast")
 let sharedStateFileURL = syncDirURL.appendingPathComponent("shared-state.json")
 writeJSON(sharedState, to: sharedStateFileURL, label: "shared state")
+
+writeJSON(localState, to: stateFileURL, label: "local state")
 
 // MARK: - Summary
 
