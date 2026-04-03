@@ -703,12 +703,30 @@ final class StoreTests: XCTestCase {
 
     // MARK: - persistence hygiene
 
+    private func writeLocalState(_ payload: [String: Any]) throws {
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        try data.write(to: tempStateFile)
+    }
+
+    private func writeSharedState(_ payload: [String: Any], in episodesDir: URL) throws {
+        let syncDir = episodesDir.appendingPathComponent(".recast")
+        try FileManager.default.createDirectory(at: syncDir, withIntermediateDirectories: true)
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        try data.write(to: syncDir.appendingPathComponent("shared-state.json"))
+    }
+
     func test_load_prunesEpisodesWithoutMatchingChannels() throws {
         let validChannel = makeChannel(name: "Valid", urlHandle: "valid")
         let validEpisode = makeEpisode(channelID: validChannel.id, videoID: "keep")
         let orphanEpisode = makeEpisode(channelID: UUID(), videoID: "orphan")
 
-        let payload: [String: Any] = [
+        try writeLocalState([
+            "episodesDirectory": tempDir.path,
+            "serverPort": 8888,
+            "autoFetchInterval": 0,
+            "autoStartServer": false,
+        ])
+        try writeSharedState([
             "channels": [[
                 "id": validChannel.id.uuidString,
                 "url": validChannel.url,
@@ -735,14 +753,7 @@ final class StoreTests: XCTestCase {
                     "isPlayed": orphanEpisode.isPlayed,
                 ],
             ],
-            "episodesDirectory": tempDir.path,
-            "serverPort": 8888,
-            "autoFetchInterval": 0,
-            "autoStartServer": false,
-        ]
-
-        let data = try JSONSerialization.data(withJSONObject: payload)
-        try data.write(to: tempStateFile)
+        ], in: tempDir)
 
         let loadedStore = AppStore(
             stateFileURL: tempStateFile,
@@ -761,17 +772,12 @@ final class StoreTests: XCTestCase {
         let missingTempDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(UUID().uuidString, isDirectory: true)
 
-        let payload: [String: Any] = [
-            "channels": [],
-            "episodes": [],
+        try writeLocalState([
             "episodesDirectory": missingTempDirectory.path,
             "serverPort": 8888,
             "autoFetchInterval": 0,
             "autoStartServer": false,
-        ]
-
-        let data = try JSONSerialization.data(withJSONObject: payload)
-        try data.write(to: tempStateFile)
+        ])
 
         let loadedStore = AppStore(
             stateFileURL: tempStateFile,
@@ -785,16 +791,11 @@ final class StoreTests: XCTestCase {
     }
 
     func test_load_defaultsEpisodesDirectoryWhenStateOmitsIt() throws {
-        let payload: [String: Any] = [
-            "channels": [],
-            "episodes": [],
+        try writeLocalState([
             "serverPort": 8888,
             "autoFetchInterval": 0,
             "autoStartServer": false,
-        ]
-
-        let data = try JSONSerialization.data(withJSONObject: payload)
-        try data.write(to: tempStateFile)
+        ])
 
         let loadedStore = AppStore(
             stateFileURL: tempStateFile,
@@ -823,6 +824,64 @@ final class StoreTests: XCTestCase {
 
         XCTAssertEqual(reloadedStore.serverHost, "custom.example.com")
         XCTAssertEqual(reloadedStore.serverPort, 9999)
+    }
+
+    func test_saveAndLoad_preservesChannelsAndEpisodesViaSharedState() {
+        let channel = makeChannel()
+        let episode = makeEpisode(channelID: channel.id, videoID: "sync1")
+        store.channels = [channel]
+        store.episodes = [episode]
+
+        store.save()
+
+        let reloadedStore = AppStore(
+            stateFileURL: tempStateFile,
+            appSupportURL: tempAppSupportDir,
+            defaultEpisodesDirectory: defaultEpisodesDir,
+            shouldLoadPersistentState: true,
+            autoCheckDependencies: false
+        )
+
+        XCTAssertEqual(reloadedStore.channels.count, 1)
+        XCTAssertEqual(reloadedStore.channels.first?.name, channel.name)
+        XCTAssertEqual(reloadedStore.episodes.count, 1)
+        XCTAssertEqual(reloadedStore.episodes.first?.videoID, "sync1")
+    }
+
+    func test_sharedState_channelsVisibleFromSecondMachineLocalState() throws {
+        // Simulate Machine A: save channels and episodes to the shared episodes directory.
+        let channel = makeChannel(name: "Machine A Channel")
+        let episode = makeEpisode(channelID: channel.id, videoID: "machineA1")
+        store.channels = [channel]
+        store.episodes = [episode]
+        store.save()
+
+        // Simulate Machine B: its own local state file pointing at the same episodes directory
+        // but with different machine-specific settings (e.g. different server port).
+        let machineBStateFile = tempDir.appendingPathComponent("machine-b-state.json")
+        let machineBLocalData = try JSONSerialization.data(withJSONObject: [
+            "episodesDirectory": tempDir.path,
+            "serverPort": 9999,
+            "autoFetchInterval": 0,
+            "autoStartServer": false,
+        ] as [String: Any])
+        try machineBLocalData.write(to: machineBStateFile)
+
+        let machineBStore = AppStore(
+            stateFileURL: machineBStateFile,
+            appSupportURL: tempAppSupportDir,
+            defaultEpisodesDirectory: defaultEpisodesDir,
+            shouldLoadPersistentState: true,
+            autoCheckDependencies: false
+        )
+
+        // Machine B sees Machine A's channels and episodes.
+        XCTAssertEqual(machineBStore.channels.count, 1)
+        XCTAssertEqual(machineBStore.channels.first?.name, "Machine A Channel")
+        XCTAssertEqual(machineBStore.episodes.count, 1)
+        XCTAssertEqual(machineBStore.episodes.first?.videoID, "machineA1")
+        // Machine B keeps its own server settings.
+        XCTAssertEqual(machineBStore.serverPort, 9999)
     }
 
     func test_cleanupPartialArtifacts_removesOnlyMatchingFiles() async throws {
