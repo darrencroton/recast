@@ -784,24 +784,10 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(loadedStore.episodesDirectory.standardizedFileURL, defaultEpisodesDir.standardizedFileURL)
     }
 
-    func test_load_migratesLegacyCombinedOutputDirectoryToDirectEpisodesRoot() throws {
-        let fixtureRoot = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".recast-test-artifacts", isDirectory: true)
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: fixtureRoot) }
-
-        let legacyOutputDir = fixtureRoot.appendingPathComponent("legacy-output", isDirectory: true)
-        let legacyEpisodesDir = legacyOutputDir.appendingPathComponent("episodes", isDirectory: true)
-        try FileManager.default.createDirectory(at: legacyEpisodesDir, withIntermediateDirectories: true)
-        FileManager.default.createFile(
-            atPath: legacyEpisodesDir.appendingPathComponent(Paths.managedEpisodesMarkerFileName).path,
-            contents: Data()
-        )
-
+    func test_load_defaultsEpisodesDirectoryWhenStateOmitsIt() throws {
         let payload: [String: Any] = [
             "channels": [],
             "episodes": [],
-            "outputDirectory": legacyOutputDir.path,
             "serverPort": 8888,
             "autoFetchInterval": 0,
             "autoStartServer": false,
@@ -818,131 +804,7 @@ final class StoreTests: XCTestCase {
             autoCheckDependencies: false
         )
 
-        XCTAssertEqual(loadedStore.episodesDirectory.standardizedFileURL, legacyOutputDir.standardizedFileURL)
-        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyEpisodesDir.path))
-    }
-
-    func test_load_flattensPreviouslyMigratedEpisodesDirectoryBackToConfiguredRoot() throws {
-        let fixtureRoot = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".recast-test-artifacts", isDirectory: true)
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: fixtureRoot) }
-
-        let configuredRoot = fixtureRoot.appendingPathComponent("configured-root", isDirectory: true)
-        let nestedEpisodesDir = configuredRoot.appendingPathComponent("episodes", isDirectory: true)
-        let channelDir = nestedEpisodesDir.appendingPathComponent("Channel [abc12345]", isDirectory: true)
-        try FileManager.default.createDirectory(at: channelDir, withIntermediateDirectories: true)
-        FileManager.default.createFile(
-            atPath: nestedEpisodesDir.appendingPathComponent(Paths.managedEpisodesMarkerFileName).path,
-            contents: Data()
-        )
-
-        let payload: [String: Any] = [
-            "channels": [],
-            "episodes": [],
-            "episodesDirectory": nestedEpisodesDir.path,
-            "serverPort": 8888,
-            "autoFetchInterval": 0,
-            "autoStartServer": false,
-        ]
-
-        let data = try JSONSerialization.data(withJSONObject: payload)
-        try data.write(to: tempStateFile)
-
-        let loadedStore = AppStore(
-            stateFileURL: tempStateFile,
-            appSupportURL: tempAppSupportDir,
-            defaultEpisodesDirectory: defaultEpisodesDir,
-            shouldLoadPersistentState: true,
-            autoCheckDependencies: false
-        )
-
-        XCTAssertEqual(loadedStore.episodesDirectory.standardizedFileURL, configuredRoot.standardizedFileURL)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: configuredRoot.appendingPathComponent("Channel [abc12345]").path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: nestedEpisodesDir.path))
-    }
-
-    func test_load_migratesLegacyManagedFeedArtifactsIntoAppSupport() throws {
-        let fixtureRoot = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".recast-test-artifacts", isDirectory: true)
-            .appendingPathComponent(UUID().uuidString, isDirectory: true)
-        defer { try? FileManager.default.removeItem(at: fixtureRoot) }
-
-        let legacyOutputDir = fixtureRoot.appendingPathComponent("legacy-output", isDirectory: true)
-        let legacyEpisodesDir = legacyOutputDir.appendingPathComponent("episodes", isDirectory: true)
-        try FileManager.default.createDirectory(at: legacyEpisodesDir, withIntermediateDirectories: true)
-        FileManager.default.createFile(
-            atPath: legacyEpisodesDir.appendingPathComponent(Paths.managedEpisodesMarkerFileName).path,
-            contents: Data()
-        )
-
-        let channel = makeChannel(name: "Science Weekly")
-        let relativePath = Paths.relativeEpisodePath(forFileName: "episode.mp3", in: channel)
-        let episodeFile = legacyEpisodesDir.appendingPathComponent(relativePath)
-        try FileManager.default.createDirectory(at: episodeFile.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data("audio".utf8).write(to: episodeFile)
-
-        let legacyShowArtworkURL = Paths.showArtworkURL(in: legacyOutputDir)
-        try Data("cover".utf8).write(to: legacyShowArtworkURL)
-
-        let legacyArtworkURL = Paths.feedArtworkURL(forVideoID: "episode123", in: legacyOutputDir)
-        try FileManager.default.createDirectory(at: legacyArtworkURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data("art".utf8).write(to: legacyArtworkURL)
-
-        FeedGenerator.write(
-            episodes: [makeEpisode(channelID: channel.id, videoID: "episode123", fileName: relativePath)],
-            channels: [channel],
-            baseURL: "http://localhost:8888",
-            episodesDirectory: legacyEpisodesDir,
-            to: legacyOutputDir
-        )
-
-        let payload: [String: Any] = [
-            "channels": [
-                [
-                    "id": channel.id.uuidString,
-                    "url": channel.url,
-                    "name": channel.name,
-                    "sourceKind": "collection",
-                    "dateAdded": channel.dateAdded.timeIntervalSince1970,
-                ],
-            ],
-            "episodes": [
-                [
-                    "id": UUID().uuidString,
-                    "channelID": channel.id.uuidString,
-                    "videoID": "episode123",
-                    "title": "episode123",
-                    "fileName": relativePath,
-                    "publishDate": Date().timeIntervalSince1970,
-                    "durationSeconds": 120,
-                    "isPlayed": false,
-                    "isNew": false,
-                ],
-            ],
-            "outputDirectory": legacyOutputDir.path,
-            "serverPort": 8888,
-            "autoFetchInterval": 0,
-            "autoStartServer": false,
-        ]
-
-        let data = try JSONSerialization.data(withJSONObject: payload)
-        try data.write(to: tempStateFile)
-
-        _ = AppStore(
-            stateFileURL: tempStateFile,
-            appSupportURL: tempAppSupportDir,
-            defaultEpisodesDirectory: defaultEpisodesDir,
-            shouldLoadPersistentState: true,
-            autoCheckDependencies: false
-        )
-
-        XCTAssertTrue(FileManager.default.fileExists(atPath: legacyOutputDir.appendingPathComponent(relativePath).path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyEpisodesDir.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: Paths.showArtworkURL(in: feedDir).path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: Paths.feedArtworkURL(forVideoID: "episode123", in: feedDir).path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: Paths.feedFileURL(in: legacyOutputDir).path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyShowArtworkURL.path))
+        XCTAssertEqual(loadedStore.episodesDirectory.standardizedFileURL, defaultEpisodesDir.standardizedFileURL)
     }
 
     func test_saveAndLoad_preservesServerHostAndServerPort() {

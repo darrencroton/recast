@@ -96,7 +96,6 @@ final class AppStore {
         var channels: [Channel]
         var episodes: [Episode]
         var episodesDirectory: String?
-        var outputDirectory: String?
         var serverPort: Int
         var serverHost: String?
         var autoFetchInterval: Int?
@@ -108,7 +107,6 @@ final class AppStore {
             channels: channels,
             episodes: episodes,
             episodesDirectory: episodesDirectory.path,
-            outputDirectory: nil,
             serverPort: serverPort,
             serverHost: serverHost.isEmpty ? nil : serverHost,
             autoFetchInterval: autoFetchInterval,
@@ -143,43 +141,32 @@ final class AppStore {
         }
         channels = state.channels
         episodes = state.episodes
-        let legacyOutputDirectory = state.outputDirectory.map { URL(fileURLWithPath: $0) }
-        let loadedEpisodesDirectory = state.episodesDirectory.map { URL(fileURLWithPath: $0) }
-        let resolvedStorage = resolvedStorageDirectories(
-            loadedEpisodesDirectory: loadedEpisodesDirectory,
-            legacyOutputDirectory: legacyOutputDirectory
-        )
-        episodesDirectory = sanitizedEpisodesDirectory(resolvedStorage.episodesDirectory)
+        let persistedEpisodesDirectory = state.episodesDirectory
+            .map { URL(fileURLWithPath: $0) }
+            ?? defaultEpisodesDirectory
+        episodesDirectory = sanitizedEpisodesDirectory(persistedEpisodesDirectory)
         serverPort = sanitizedServerPort(state.serverPort)
         serverHost = sanitizedServerHost(state.serverHost ?? Self.defaultServerHost)
         autoFetchInterval = state.autoFetchInterval ?? 0
         autoStartServer = state.autoStartServer ?? false
 
         let didPruneEpisodes = pruneEpisodesWithoutChannels()
-        let didResetEpisodesDirectory = episodesDirectory.standardizedFileURL != resolvedStorage.episodesDirectory.standardizedFileURL
-        let didMigrateStorageLayout = resolvedStorage.didMigrateLegacyStorageLayout
+        let didResetEpisodesDirectory = episodesDirectory.standardizedFileURL != persistedEpisodesDirectory.standardizedFileURL
 
         AppLogger.info(
             "Loaded state with \(channels.count) channel(s), \(episodes.count) valid episode(s), episodes dir \(episodesDirectory.path)",
             category: "store"
         )
 
-        if let legacyFeedRoot = resolvedStorage.legacyFeedRoot {
-            migrateLegacyManagedFeedArtifacts(from: legacyFeedRoot)
-        }
-
-        if didPruneEpisodes || didResetEpisodesDirectory || didMigrateStorageLayout {
+        if didPruneEpisodes || didResetEpisodesDirectory {
             if didPruneEpisodes {
                 AppLogger.warning("Pruned orphaned episodes that no longer matched any saved channel", category: "store")
             }
             if didResetEpisodesDirectory {
                 AppLogger.warning(
-                    "Reset missing temporary episodes directory \(resolvedStorage.episodesDirectory.path) to \(episodesDirectory.path)",
+                    "Reset missing temporary episodes directory \(persistedEpisodesDirectory.path) to \(episodesDirectory.path)",
                     category: "store"
                 )
-            }
-            if didMigrateStorageLayout {
-                AppLogger.info("Migrated legacy storage layout to direct episode folders", category: "store")
             }
             save()
         }
@@ -1088,108 +1075,6 @@ final class AppStore {
         return nil
     }
 
-    private func resolvedStorageDirectories(
-        loadedEpisodesDirectory: URL?,
-        legacyOutputDirectory: URL?
-    ) -> (episodesDirectory: URL, legacyFeedRoot: URL?, didMigrateLegacyStorageLayout: Bool) {
-        if let loadedEpisodesDirectory {
-            let didFlatten = flattenLegacyEpisodesDirectoryIfNeeded(at: loadedEpisodesDirectory)
-            let resolvedEpisodesDirectory = didFlatten
-                ? loadedEpisodesDirectory.deletingLastPathComponent()
-                : loadedEpisodesDirectory
-            let legacyFeedRoot = didFlatten ? resolvedEpisodesDirectory : nil
-            return (resolvedEpisodesDirectory, legacyFeedRoot, didFlatten)
-        }
-
-        guard let legacyOutputDirectory else {
-            return (defaultEpisodesDirectory, nil, false)
-        }
-
-        let legacyEpisodesDirectory = legacyOutputDirectory.appendingPathComponent("episodes", isDirectory: true)
-        let didFlatten = flattenLegacyEpisodesDirectoryIfNeeded(at: legacyEpisodesDirectory)
-        return (legacyOutputDirectory, legacyOutputDirectory, true)
-    }
-
-    private func flattenLegacyEpisodesDirectoryIfNeeded(at nestedEpisodesDirectory: URL) -> Bool {
-        let fileManager = FileManager.default
-        let targetRoot = nestedEpisodesDirectory.deletingLastPathComponent()
-        let markerURL = nestedEpisodesDirectory.appendingPathComponent(Paths.managedEpisodesMarkerFileName)
-
-        guard nestedEpisodesDirectory.lastPathComponent == "episodes" else { return false }
-        guard fileManager.fileExists(atPath: nestedEpisodesDirectory.path) else { return false }
-        guard fileManager.fileExists(atPath: markerURL.path) else { return false }
-        guard canFlattenLegacyEpisodesDirectory(at: nestedEpisodesDirectory, into: targetRoot) else { return false }
-
-        guard let contents = try? fileManager.contentsOfDirectory(
-            at: nestedEpisodesDirectory,
-            includingPropertiesForKeys: nil,
-            options: []
-        ) else {
-            return false
-        }
-
-        for url in contents {
-            switch url.lastPathComponent {
-            case Paths.managedEpisodesMarkerFileName:
-                let targetMarkerURL = targetRoot.appendingPathComponent(Paths.managedEpisodesMarkerFileName)
-                if !fileManager.fileExists(atPath: targetMarkerURL.path) {
-                    try? fileManager.moveItem(at: url, to: targetMarkerURL)
-                } else {
-                    try? fileManager.removeItem(at: url)
-                }
-            case ".DS_Store":
-                try? fileManager.removeItem(at: url)
-            default:
-                let targetURL = targetRoot.appendingPathComponent(url.lastPathComponent)
-                guard !fileManager.fileExists(atPath: targetURL.path) else { return false }
-                try? fileManager.moveItem(at: url, to: targetURL)
-            }
-        }
-
-        try? fileManager.removeItem(at: nestedEpisodesDirectory)
-        return true
-    }
-
-    private func canFlattenLegacyEpisodesDirectory(at nestedEpisodesDirectory: URL, into targetRoot: URL) -> Bool {
-        let fileManager = FileManager.default
-        let allowedRootEntries: Set<String> = [
-            ".DS_Store",
-            "episodes",
-            "feed.xml",
-            Paths.showArtworkFileName,
-            Paths.feedAssetsDirectoryName
-        ]
-
-        let rootContents = (try? fileManager.contentsOfDirectory(
-            at: targetRoot,
-            includingPropertiesForKeys: nil,
-            options: []
-        )) ?? []
-        guard rootContents.allSatisfy({ allowedRootEntries.contains($0.lastPathComponent) }) else {
-            return false
-        }
-
-        let nestedContents = (try? fileManager.contentsOfDirectory(
-            at: nestedEpisodesDirectory,
-            includingPropertiesForKeys: nil,
-            options: []
-        )) ?? []
-        let targetNames = Set(rootContents.map(\.lastPathComponent))
-
-        for nestedURL in nestedContents {
-            switch nestedURL.lastPathComponent {
-            case Paths.managedEpisodesMarkerFileName, ".DS_Store":
-                continue
-            default:
-                if targetNames.contains(nestedURL.lastPathComponent) {
-                    return false
-                }
-            }
-        }
-
-        return true
-    }
-
     private func sanitizedEpisodesDirectory(_ loadedDirectory: URL) -> URL {
         let standardized = loadedDirectory.standardizedFileURL
         let temporaryRoot = FileManager.default.temporaryDirectory.standardizedFileURL.path
@@ -1370,49 +1255,6 @@ final class AppStore {
                     )
                 }
             }
-        }
-    }
-
-    private func migrateLegacyManagedFeedArtifacts(from legacyOutputDirectory: URL) {
-        let fileManager = FileManager.default
-        let legacyFeedFile = legacyOutputDirectory.appendingPathComponent("feed.xml")
-        let legacyShowArtworkURL = Paths.showArtworkURL(in: legacyOutputDirectory)
-        let legacyFeedAssetsDir = Paths.feedAssetsDirectoryURL(in: legacyOutputDirectory)
-        let targetFeedDirectory = feedDirectory
-
-        if fileManager.fileExists(atPath: legacyShowArtworkURL.path) {
-            let targetShowArtworkURL = Paths.showArtworkURL(in: targetFeedDirectory)
-            if !fileManager.fileExists(atPath: targetShowArtworkURL.path) {
-                try? fileManager.copyItem(at: legacyShowArtworkURL, to: targetShowArtworkURL)
-            }
-        }
-
-        if fileManager.fileExists(atPath: legacyFeedAssetsDir.path) {
-            _ = Paths.ensureFeedAssetsDirectory(in: targetFeedDirectory)
-
-            if let legacyAssetURLs = try? fileManager.contentsOfDirectory(
-                at: legacyFeedAssetsDir,
-                includingPropertiesForKeys: nil,
-                options: [.skipsHiddenFiles]
-            ) {
-                for legacyAssetURL in legacyAssetURLs where legacyAssetURL.pathExtension.lowercased() == "jpg" {
-                    let targetAssetURL = Paths.feedAssetsDirectoryURL(in: targetFeedDirectory)
-                        .appendingPathComponent(legacyAssetURL.lastPathComponent)
-                    if !fileManager.fileExists(atPath: targetAssetURL.path) {
-                        try? fileManager.copyItem(at: legacyAssetURL, to: targetAssetURL)
-                    }
-                }
-            }
-        }
-
-        if isManagedFeed(at: legacyFeedFile) {
-            try? fileManager.removeItem(at: legacyFeedFile)
-        }
-        if fileManager.fileExists(atPath: legacyShowArtworkURL.path) {
-            try? fileManager.removeItem(at: legacyShowArtworkURL)
-        }
-        if fileManager.fileExists(atPath: legacyFeedAssetsDir.path) {
-            try? fileManager.removeItem(at: legacyFeedAssetsDir)
         }
     }
 
