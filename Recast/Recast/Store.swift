@@ -112,8 +112,10 @@ final class AppStore {
         // local state pointing at the old episodes directory so the next launch can still find
         // the previous shared state rather than loading nothing.
         let shared = SharedState(channels: channels, episodes: episodes)
-        writeJSON(shared, to: Paths.sharedStateFile(in: episodesDirectory),
-                  label: "shared state (\(channels.count) channel(s), \(episodes.count) episode(s))")
+        guard writeJSON(shared, to: Paths.sharedStateFile(in: episodesDirectory),
+                        label: "shared state (\(channels.count) channel(s), \(episodes.count) episode(s))") else {
+            return
+        }
 
         let local = LocalState(
             episodesDirectory: episodesDirectory.path,
@@ -125,20 +127,23 @@ final class AppStore {
         writeJSON(local, to: stateFileURL, label: "local state")
     }
 
-    private func writeJSON<T: Encodable>(_ value: T, to url: URL, label: String) {
+    @discardableResult
+    private func writeJSON<T: Encodable>(_ value: T, to url: URL, label: String) -> Bool {
         guard let data = try? JSONEncoder().encode(value) else {
             AppLogger.error("Failed to encode \(label)", category: "store")
-            return
+            return false
         }
         do {
             try FileManager.default.createDirectory(
                 at: url.deletingLastPathComponent(),
                 withIntermediateDirectories: true
             )
-            try data.write(to: url)
+            try data.write(to: url, options: .atomic)
             AppLogger.info("Saved \(label) to \(url.lastPathComponent)", category: "store")
+            return true
         } catch {
             AppLogger.error("Failed to write \(label) to \(url.path): \(error.localizedDescription)", category: "store")
+            return false
         }
     }
 

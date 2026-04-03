@@ -49,6 +49,17 @@ if let v = json["serverHost"] as? String       { localState["serverHost"] = v }
 if let v = json["autoFetchInterval"] as? Int   { localState["autoFetchInterval"] = v }
 if let v = json["autoStartServer"] as? Bool    { localState["autoStartServer"] = v }
 
+// MARK: - Guard: refuse to run if already migrated
+
+let syncDirURL = episodesDirURL.appendingPathComponent(".recast")
+let sharedStateFileURL = syncDirURL.appendingPathComponent("shared-state.json")
+
+guard !fm.fileExists(atPath: sharedStateFileURL.path) else {
+    print("Shared state already exists at \(sharedStateFileURL.path).")
+    print("Migration has already been run — nothing to do.")
+    exit(0)
+}
+
 // MARK: - Build shared state (channels + episodes, goes into episodes directory for cloud sync)
 
 let sharedState: [String: Any] = [
@@ -69,7 +80,7 @@ func writeJSON(_ dict: [String: Any], to url: URL, label: String) {
     }
     do {
         try fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try data.write(to: url)
+        try data.write(to: url, options: .atomic)
         print("Written \(label) → \(url.path)")
     } catch {
         print("ERROR: Could not write \(label): \(error.localizedDescription) — aborting.")
@@ -77,10 +88,7 @@ func writeJSON(_ dict: [String: Any], to url: URL, label: String) {
     }
 }
 
-let syncDirURL = episodesDirURL.appendingPathComponent(".recast")
-let sharedStateFileURL = syncDirURL.appendingPathComponent("shared-state.json")
 writeJSON(sharedState, to: sharedStateFileURL, label: "shared state")
-
 writeJSON(localState, to: stateFileURL, label: "local state")
 
 // MARK: - Summary

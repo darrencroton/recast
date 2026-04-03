@@ -709,10 +709,10 @@ final class StoreTests: XCTestCase {
     }
 
     private func writeSharedState(_ payload: [String: Any], in episodesDir: URL) throws {
-        let syncDir = episodesDir.appendingPathComponent(".recast")
+        let syncDir = episodesDir.appendingPathComponent(Paths.syncDirectoryName)
         try FileManager.default.createDirectory(at: syncDir, withIntermediateDirectories: true)
         let data = try JSONSerialization.data(withJSONObject: payload)
-        try data.write(to: syncDir.appendingPathComponent("shared-state.json"))
+        try data.write(to: Paths.sharedStateFile(in: episodesDir))
     }
 
     func test_load_prunesEpisodesWithoutMatchingChannels() throws {

@@ -50,7 +50,7 @@ You can also copy the feed URL shown in Settings or the status bar.
 - **Auto-fetch** — Check for new episodes every 6, 12, or 24 hours
 - **Auto-start server** — Start the podcast server when the app launches
 - **QR code** — One-tap setup for your phone
-- **Multi-Mac sync** — Point two Macs at the same cloud episodes folder and subscriptions, episode state, and download history stay in sync automatically
+- **Multi-Mac sync** — Point two Macs at the same cloud episodes folder, and subscriptions, episode state, and download history stay in sync automatically
 - **Reveal in Finder** — Right-click any downloaded episode to open it in Finder
 
 ## Settings
