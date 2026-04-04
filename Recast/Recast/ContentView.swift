@@ -36,6 +36,7 @@ struct ContentView: View {
     @State private var isHoveringRefreshControl = false
     @State private var isHoveringDownloadControl = false
     @State private var showDeleteConfirmation = false
+    @State private var pendingDeletion: SelectionActionContext = .none
 
     private var selectedChannelIDs: Set<UUID> {
         var ids = Set<UUID>()
@@ -184,7 +185,7 @@ struct ContentView: View {
         }
         .alert(deleteConfirmationTitle, isPresented: $showDeleteConfirmation) {
             Button(deleteConfirmationButtonLabel, role: .destructive) {
-                deleteSelection()
+                deleteSelection(pendingDeletion)
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -365,6 +366,7 @@ struct ContentView: View {
 
     private var deleteSelectionButton: some View {
         Button(role: .destructive) {
+            pendingDeletion = selectionContext
             showDeleteConfirmation = true
         } label: {
             Label("Delete", systemImage: "trash")
@@ -426,7 +428,7 @@ struct ContentView: View {
     }
 
     private var deleteConfirmationTitle: String {
-        switch selectionContext {
+        switch pendingDeletion {
         case .channels(let ids):
             return ids.count == 1 ? "Remove Source?" : "Remove \(ids.count) Sources?"
         case .episodes(let ids):
@@ -437,11 +439,13 @@ struct ContentView: View {
     }
 
     private var deleteConfirmationMessage: String {
-        switch selectionContext {
-        case .channels:
-            return "The source will be removed from Recast. Any downloaded files will remain on disk."
-        case .episodes:
-            let hasDownloads = selectedVisibleEpisodes.contains { $0.isDownloaded }
+        switch pendingDeletion {
+        case .channels(let ids):
+            return ids.count == 1
+                ? "The source will be removed from Recast. Any downloaded files will remain on disk."
+                : "The selected sources will be removed from Recast. Any downloaded files will remain on disk."
+        case .episodes(let ids):
+            let hasDownloads = store.episodes.filter { ids.contains($0.id) }.contains { $0.isDownloaded }
             if hasDownloads {
                 return "This will permanently delete the downloaded files and remove the episodes from your list. To keep episodes in your list, use Remove Download from the right-click menu instead."
             } else {
@@ -453,12 +457,10 @@ struct ContentView: View {
     }
 
     private var deleteConfirmationButtonLabel: String {
-        switch selectionContext {
+        switch pendingDeletion {
         case .channels:
             return "Remove"
-        case .episodes:
-            return "Delete"
-        case .none:
+        case .episodes, .none:
             return "Delete"
         }
     }
@@ -475,8 +477,8 @@ struct ContentView: View {
         }
     }
 
-    private func deleteSelection() {
-        switch selectionContext {
+    private func deleteSelection(_ context: SelectionActionContext? = nil) {
+        switch context ?? selectionContext {
         case .channels(let ids):
             deleteChannels(ids)
         case .episodes(let ids):
