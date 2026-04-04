@@ -200,8 +200,18 @@ final class AppStore {
     }
 
     func switchEpisodesDirectory(to url: URL) {
+        let sharedFileURL = Paths.sharedStateFile(in: url)
+        let shared: SharedState?
+        if FileManager.default.fileExists(atPath: sharedFileURL.path) {
+            guard let loaded = readJSON(SharedState.self, from: sharedFileURL, label: "shared state") else {
+                AppLogger.warning("Aborting directory switch: shared state at \(url.lastPathComponent) is unreadable", category: "store")
+                return
+            }
+            shared = loaded
+        } else {
+            shared = nil
+        }
         episodesDirectory = url
-        let shared = readJSON(SharedState.self, from: Paths.sharedStateFile(in: episodesDirectory), label: "shared state")
         channels = shared?.channels ?? []
         episodes = shared?.episodes ?? []
         _ = pruneEpisodesWithoutChannels()

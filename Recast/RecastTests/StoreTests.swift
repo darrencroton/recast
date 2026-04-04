@@ -971,6 +971,26 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(channels.count, 1, "Existing shared state must not be overwritten with empty data")
     }
 
+    func test_switchEpisodesDirectory_abortsWhenSharedStateExistsButIsUnreadable() throws {
+        let cloudDir = tempDir.appendingPathComponent("cloud", isDirectory: true)
+        try FileManager.default.createDirectory(at: cloudDir, withIntermediateDirectories: true)
+
+        // Write corrupt data (not valid JSON) to the shared state file.
+        let syncDir = cloudDir.appendingPathComponent(Paths.syncDirectoryName)
+        try FileManager.default.createDirectory(at: syncDir, withIntermediateDirectories: true)
+        try Data("not valid json {{{".utf8).write(to: Paths.sharedStateFile(in: cloudDir))
+
+        let originalDir = store.episodesDirectory
+        store.switchEpisodesDirectory(to: cloudDir)
+
+        // Directory must not change and existing channels must be preserved.
+        XCTAssertEqual(store.episodesDirectory, originalDir, "Switch must abort when shared state is unreadable")
+        XCTAssertTrue(store.channels.isEmpty)
+
+        // The corrupt file must not be overwritten with empty data.
+        let corruptData = try Data(contentsOf: Paths.sharedStateFile(in: cloudDir))
+        XCTAssertEqual(String(data: corruptData, encoding: .utf8), "not valid json {{{")
+    }
 
     func test_cleanupPartialArtifacts_removesOnlyMatchingFiles() async throws {
         let channel = makeChannel()
