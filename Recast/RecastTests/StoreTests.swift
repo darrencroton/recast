@@ -924,6 +924,74 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(machineBStore.serverPort, 9999)
     }
 
+    func test_switchEpisodesDirectory_loadsSharedStateFromNewDirectory() throws {
+        // Simulate an existing shared state in a "cloud" directory.
+        let cloudDir = tempDir.appendingPathComponent("cloud", isDirectory: true)
+        try FileManager.default.createDirectory(at: cloudDir, withIntermediateDirectories: true)
+        let channel = makeChannel(name: "Cloud Channel")
+        let episode = makeEpisode(channelID: channel.id, videoID: "cloud1")
+        try writeSharedState([
+            "channels": [["id": channel.id.uuidString, "url": channel.url,
+                          "name": channel.name, "dateAdded": channel.dateAdded.timeIntervalSince1970]],
+            "episodes": [["id": episode.id.uuidString, "channelID": episode.channelID.uuidString,
+                          "videoID": episode.videoID, "title": episode.title,
+                          "publishDate": episode.publishDate.timeIntervalSince1970,
+                          "durationSeconds": episode.durationSeconds, "isPlayed": false]],
+        ], in: cloudDir)
+
+        // Fresh-install store starts empty; switching to the cloud dir should load its shared state.
+        XCTAssertTrue(store.channels.isEmpty)
+        store.switchEpisodesDirectory(to: cloudDir)
+
+        XCTAssertEqual(store.channels.count, 1)
+        XCTAssertEqual(store.channels.first?.name, "Cloud Channel")
+        XCTAssertEqual(store.episodes.count, 1)
+        XCTAssertEqual(store.episodes.first?.videoID, "cloud1")
+        XCTAssertEqual(store.episodesDirectory, cloudDir)
+    }
+
+    func test_switchEpisodesDirectory_doesNotOverwriteExistingSharedState() throws {
+        // Mac A has channels/episodes in the cloud dir already.
+        let cloudDir = tempDir.appendingPathComponent("cloud", isDirectory: true)
+        try FileManager.default.createDirectory(at: cloudDir, withIntermediateDirectories: true)
+        let channel = makeChannel(name: "Existing Channel")
+        try writeSharedState([
+            "channels": [["id": channel.id.uuidString, "url": channel.url,
+                          "name": channel.name, "dateAdded": channel.dateAdded.timeIntervalSince1970]],
+            "episodes": [],
+        ], in: cloudDir)
+
+        // A fresh-install store (empty) switching to the cloud dir must not clobber the existing data.
+        store.switchEpisodesDirectory(to: cloudDir)
+
+        let sharedStateURL = Paths.sharedStateFile(in: cloudDir)
+        let data = try Data(contentsOf: sharedStateURL)
+        let json = try JSONSerialization.jsonObject(with: data) as! [String: Any]
+        let channels = json["channels"] as! [[String: Any]]
+        XCTAssertEqual(channels.count, 1, "Existing shared state must not be overwritten with empty data")
+    }
+
+    func test_switchEpisodesDirectory_abortsWhenSharedStateExistsButIsUnreadable() throws {
+        let cloudDir = tempDir.appendingPathComponent("cloud", isDirectory: true)
+        try FileManager.default.createDirectory(at: cloudDir, withIntermediateDirectories: true)
+
+        // Write corrupt data (not valid JSON) to the shared state file.
+        let syncDir = cloudDir.appendingPathComponent(Paths.syncDirectoryName)
+        try FileManager.default.createDirectory(at: syncDir, withIntermediateDirectories: true)
+        try Data("not valid json {{{".utf8).write(to: Paths.sharedStateFile(in: cloudDir))
+
+        let originalDir = store.episodesDirectory
+        store.switchEpisodesDirectory(to: cloudDir)
+
+        // Directory must not change and existing channels must be preserved.
+        XCTAssertEqual(store.episodesDirectory, originalDir, "Switch must abort when shared state is unreadable")
+        XCTAssertTrue(store.channels.isEmpty)
+
+        // The corrupt file must not be overwritten with empty data.
+        let corruptData = try Data(contentsOf: Paths.sharedStateFile(in: cloudDir))
+        XCTAssertEqual(String(data: corruptData, encoding: .utf8), "not valid json {{{")
+    }
+
     func test_cleanupPartialArtifacts_removesOnlyMatchingFiles() async throws {
         let channel = makeChannel()
         let episode = makeEpisode(channelID: channel.id, videoID: "partial")
