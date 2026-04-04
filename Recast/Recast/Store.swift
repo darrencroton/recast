@@ -199,6 +199,16 @@ final class AppStore {
         return value
     }
 
+    func switchEpisodesDirectory(to url: URL) {
+        episodesDirectory = url
+        let shared = readJSON(SharedState.self, from: Paths.sharedStateFile(in: episodesDirectory), label: "shared state")
+        channels = shared?.channels ?? []
+        episodes = shared?.episodes ?? []
+        _ = pruneEpisodesWithoutChannels()
+        save()
+        regenerateFeed()
+    }
+
     // MARK: - Lifecycle (called from RecastApp.onAppear)
 
     func onLaunch() {
