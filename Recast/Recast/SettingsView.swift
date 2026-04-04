@@ -171,8 +171,7 @@ struct SettingsView: View {
         panel.prompt = "Select"
         panel.message = "Choose the folder where Recast should store downloaded podcast episodes."
         if panel.runModal() == .OK, let url = panel.url {
-            store.episodesDirectory = url
-            store.save()
+            store.switchEpisodesDirectory(to: url)
         }
     }
 
