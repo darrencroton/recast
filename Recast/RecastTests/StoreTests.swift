@@ -634,6 +634,46 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: artworkPath.path))
     }
 
+    // MARK: - removeEpisodeDownloads
+
+    func test_removeEpisodeDownloads_keepsEpisodeInList() throws {
+        let chID = UUID()
+        let ep = makeEpisode(channelID: chID, videoID: "v1", fileName: "v1.mp3")
+        store.episodes = [ep]
+        let mp3Path = Paths.episodesDir(in: tempDir).appendingPathComponent("v1.mp3")
+        try Data("fake".utf8).write(to: mp3Path)
+
+        store.removeEpisodeDownloads([ep.id])
+
+        XCTAssertEqual(store.episodes.count, 1, "Episode should remain in list")
+        XCTAssertNil(store.episodes[0].fileName, "fileName should be cleared")
+        XCTAssertFalse(store.episodes[0].isDownloaded, "isDownloaded should be false")
+    }
+
+    func test_removeEpisodeDownloads_deletesMP3File() throws {
+        let chID = UUID()
+        let ep = makeEpisode(channelID: chID, videoID: "v1", fileName: "v1.mp3")
+        store.episodes = [ep]
+        let mp3Path = Paths.episodesDir(in: tempDir).appendingPathComponent("v1.mp3")
+        try Data("fake".utf8).write(to: mp3Path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: mp3Path.path))
+
+        store.removeEpisodeDownloads([ep.id])
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: mp3Path.path), "MP3 file should be deleted from disk")
+    }
+
+    func test_removeEpisodeDownloads_ignoresNonDownloadedEpisodes() {
+        let chID = UUID()
+        let ep = makeEpisode(channelID: chID, videoID: "v1") // no fileName
+        store.episodes = [ep]
+
+        store.removeEpisodeDownloads([ep.id])
+
+        XCTAssertEqual(store.episodes.count, 1, "Episode should remain in list")
+        XCTAssertNil(store.episodes[0].fileName, "fileName should still be nil")
+    }
+
     // MARK: - removeChannels
 
     func test_removeChannels_removesEpisodes() {

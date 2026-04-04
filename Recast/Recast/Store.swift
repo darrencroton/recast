@@ -559,6 +559,22 @@ final class AppStore {
         regenerateFeed()
     }
 
+    func removeEpisodeDownloads(_ ids: Set<UUID>) {
+        let targetEpisodes = episodes.filter { ids.contains($0.id) && $0.isDownloaded }
+        guard !targetEpisodes.isEmpty else { return }
+        AppLogger.info("Removing downloads for \(targetEpisodes.count) episode(s)", category: "episodes")
+        let episodesDir = Paths.episodesDirectoryURL(in: episodesDirectory)
+        removeManagedEpisodeArtifacts(for: targetEpisodes, channels: channels, in: episodesDirectory)
+        removeManagedEpisodesDirectoryIfEmptyAndOwned(at: episodesDir)
+        for id in ids {
+            if let idx = episodes.firstIndex(where: { $0.id == id }) {
+                episodes[idx].fileName = nil
+            }
+        }
+        save()
+        regenerateFeed()
+    }
+
     func togglePlayed(_ episodeID: UUID) {
         if let idx = episodes.firstIndex(where: { $0.id == episodeID }) {
             episodes[idx].isPlayed.toggle()

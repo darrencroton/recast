@@ -35,6 +35,8 @@ struct ContentView: View {
     @State private var focusedPane: FocusedPane?
     @State private var isHoveringRefreshControl = false
     @State private var isHoveringDownloadControl = false
+    @State private var showDeleteConfirmation = false
+    @State private var pendingDeletion: SelectionActionContext = .none
 
     private var selectedChannelIDs: Set<UUID> {
         var ids = Set<UUID>()
@@ -180,6 +182,14 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showAddSheet) {
             AddChannelSheet()
+        }
+        .alert(deleteConfirmationTitle, isPresented: $showDeleteConfirmation) {
+            Button(deleteConfirmationButtonLabel, role: .destructive) {
+                deleteSelection(pendingDeletion)
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(deleteConfirmationMessage)
         }
         .onChange(of: store.channels.count) { _, newCount in
             if newCount == 0 {
@@ -356,7 +366,8 @@ struct ContentView: View {
 
     private var deleteSelectionButton: some View {
         Button(role: .destructive) {
-            deleteSelection()
+            pendingDeletion = selectionContext
+            showDeleteConfirmation = true
         } label: {
             Label("Delete", systemImage: "trash")
         }
@@ -403,11 +414,54 @@ struct ContentView: View {
     private var deleteButtonHelpText: String {
         switch selectionContext {
         case .channels:
-            return "Delete the selected sources"
+            return "Remove the selected sources"
         case .episodes:
-            return "Delete the selected episodes"
+            let hasDownloads = selectedVisibleEpisodes.contains { $0.isDownloaded }
+            if hasDownloads {
+                return "Delete episode files and remove from list"
+            } else {
+                return "Remove the selected episodes from your list"
+            }
         case .none:
             return "Delete the selected item"
+        }
+    }
+
+    private var deleteConfirmationTitle: String {
+        switch pendingDeletion {
+        case .channels(let ids):
+            return ids.count == 1 ? "Remove Source?" : "Remove \(ids.count) Sources?"
+        case .episodes(let ids):
+            return ids.count == 1 ? "Delete Episode?" : "Delete \(ids.count) Episodes?"
+        case .none:
+            return "Delete?"
+        }
+    }
+
+    private var deleteConfirmationMessage: String {
+        switch pendingDeletion {
+        case .channels(let ids):
+            return ids.count == 1
+                ? "The source will be removed from Recast. Any downloaded files will remain on disk."
+                : "The selected sources will be removed from Recast. Any downloaded files will remain on disk."
+        case .episodes(let ids):
+            let hasDownloads = store.episodes.filter { ids.contains($0.id) }.contains { $0.isDownloaded }
+            if hasDownloads {
+                return "This will permanently delete the downloaded files and remove the episodes from your list. To keep episodes in your list, use Remove Download from the right-click menu instead."
+            } else {
+                return "The episodes will be removed from your list."
+            }
+        case .none:
+            return ""
+        }
+    }
+
+    private var deleteConfirmationButtonLabel: String {
+        switch pendingDeletion {
+        case .channels:
+            return "Remove"
+        case .episodes, .none:
+            return "Delete"
         }
     }
 
@@ -423,8 +477,8 @@ struct ContentView: View {
         }
     }
 
-    private func deleteSelection() {
-        switch selectionContext {
+    private func deleteSelection(_ context: SelectionActionContext? = nil) {
+        switch context ?? selectionContext {
         case .channels(let ids):
             deleteChannels(ids)
         case .episodes(let ids):
