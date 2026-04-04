@@ -138,6 +138,21 @@ struct EpisodeListView: View {
                 }
             }
 
+            let hasDownloadedEpisodes = targetEpisodes.contains { $0.isDownloaded }
+
+            if hasDownloadedEpisodes {
+                Divider()
+
+                Button {
+                    store.removeEpisodeDownloads(targetIDs)
+                } label: {
+                    Label(
+                        targetIDs.count == 1 ? "Remove Download" : "Remove Downloads",
+                        systemImage: "minus.circle"
+                    )
+                }
+            }
+
             Divider()
 
             Button(role: .destructive) {
