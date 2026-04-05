@@ -64,23 +64,17 @@ enum Paths {
         return dir
     }
 
-    static func episodesDirectoryURL(in episodesDir: URL) -> URL {
-        episodesDir
-    }
-
-    static func episodesDir(in episodesDir: URL) -> URL {
-        let dir = episodesDirectoryURL(in: episodesDir)
-        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
+    static func ensureEpisodesDirectory(in episodesDir: URL) -> URL {
+        try? fm.createDirectory(at: episodesDir, withIntermediateDirectories: true)
+        return episodesDir
     }
 
     static func managedEpisodesMarker(in episodesDir: URL) -> URL {
-        episodesDirectoryURL(in: episodesDir)
-            .appendingPathComponent(managedEpisodesMarkerFileName)
+        episodesDir.appendingPathComponent(managedEpisodesMarkerFileName)
     }
 
     static func ensureManagedEpisodesDirectory(in episodesDir: URL) -> URL {
-        let dir = self.episodesDir(in: episodesDir)
+        let dir = ensureEpisodesDirectory(in: episodesDir)
         let marker = managedEpisodesMarker(in: episodesDir)
         if !fm.fileExists(atPath: marker.path) {
             fm.createFile(atPath: marker.path, contents: Data())
@@ -95,8 +89,7 @@ enum Paths {
     }
 
     static func channelEpisodesDir(for channel: Channel, in episodesDir: URL) -> URL {
-        episodesDirectoryURL(in: episodesDir)
-            .appendingPathComponent(channelDirectoryName(for: channel), isDirectory: true)
+        episodesDir.appendingPathComponent(channelDirectoryName(for: channel), isDirectory: true)
     }
 
     static func ensureManagedChannelEpisodesDirectory(for channel: Channel, in episodesDir: URL) -> URL {
@@ -114,7 +107,7 @@ enum Paths {
     }
 
     static func episodeFileURL(forRelativePath relativePath: String, in episodesDir: URL) -> URL {
-        episodesDirectoryURL(in: episodesDir).appendingPathComponent(relativePath)
+        episodesDir.appendingPathComponent(relativePath)
     }
 
     static func legacyArtworkURL(forEpisodeFileName fileName: String, in episodesDir: URL) -> URL {

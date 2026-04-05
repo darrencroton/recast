@@ -570,9 +570,8 @@ final class AppStore {
     func deleteEpisodes(_ ids: Set<UUID>) {
         AppLogger.info("Deleting \(ids.count) episode(s)", category: "episodes")
         let targetEpisodes = episodes.filter { ids.contains($0.id) }
-        let episodesDir = Paths.episodesDirectoryURL(in: episodesDirectory)
         removeManagedEpisodeArtifacts(for: targetEpisodes, channels: channels, in: episodesDirectory)
-        removeManagedEpisodesDirectoryIfEmptyAndOwned(at: episodesDir)
+        removeManagedEpisodesDirectoryIfEmptyAndOwned(at: episodesDirectory)
         episodes.removeAll { ids.contains($0.id) }
         pruneEmptySingleEpisodeSources()
         save()
@@ -583,9 +582,8 @@ final class AppStore {
         let targetEpisodes = episodes.filter { ids.contains($0.id) && $0.isDownloaded }
         guard !targetEpisodes.isEmpty else { return }
         AppLogger.info("Removing downloads for \(targetEpisodes.count) episode(s)", category: "episodes")
-        let episodesDir = Paths.episodesDirectoryURL(in: episodesDirectory)
         removeManagedEpisodeArtifacts(for: targetEpisodes, channels: channels, in: episodesDirectory)
-        removeManagedEpisodesDirectoryIfEmptyAndOwned(at: episodesDir)
+        removeManagedEpisodesDirectoryIfEmptyAndOwned(at: episodesDirectory)
         for id in ids {
             if let idx = episodes.firstIndex(where: { $0.id == id }) {
                 episodes[idx].fileName = nil
@@ -989,7 +987,7 @@ final class AppStore {
         let previousEpisodes = episodes
         removeManagedEpisodeArtifacts(for: previousEpisodes, channels: channels, in: previousEpisodesDirectory)
         try? FileManager.default.removeItem(at: Paths.syncDirectoryURL(in: previousEpisodesDirectory))
-        removeManagedEpisodesDirectoryIfEmptyAndOwned(at: Paths.episodesDirectoryURL(in: previousEpisodesDirectory))
+        removeManagedEpisodesDirectoryIfEmptyAndOwned(at: previousEpisodesDirectory)
         removeManagedFeedArtifacts(in: feedDirectory)
         removeManagedAppSupportArtifacts(removeStateFile: true)
 
@@ -1172,8 +1170,6 @@ final class AppStore {
 
     private func removeManagedEpisodeArtifacts(for episodes: [Episode], channels: [Channel], in episodesDirectory: URL) {
         let fileManager = FileManager.default
-        let episodesDir = Paths.episodesDirectoryURL(in: episodesDirectory)
-
         let downloadedFileURLs = Set(
             episodes.compactMap { episode in
                 episode.fileName.map { Paths.episodeFileURL(forRelativePath: $0, in: episodesDirectory) }
@@ -1197,10 +1193,10 @@ final class AppStore {
         }
 
         let channelsByID = Dictionary(uniqueKeysWithValues: channels.map { ($0.id, $0) })
-        var managedPrefixesByDirectory: [URL: Set<String>] = [episodesDir: []]
+        var managedPrefixesByDirectory: [URL: Set<String>] = [episodesDirectory: []]
         for episode in episodes {
             let prefix = String(episode.suggestedFileName.dropLast(4))
-            managedPrefixesByDirectory[episodesDir, default: []].insert(prefix)
+            managedPrefixesByDirectory[episodesDirectory, default: []].insert(prefix)
             if let channel = channelsByID[episode.channelID] {
                 let channelDir = Paths.channelEpisodesDir(for: channel, in: episodesDirectory)
                 managedPrefixesByDirectory[channelDir, default: []].insert(prefix)
