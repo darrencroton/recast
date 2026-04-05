@@ -178,39 +178,20 @@ enum FeedAssetLinks {
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: sourceURL.path) else { return }
 
-        func createHardLink() -> Bool {
-            do {
-                try fileManager.linkItem(at: sourceURL, to: targetURL)
-                return true
-            } catch {
-                return false
-            }
-        }
+        try? fileManager.removeItem(at: targetURL)
 
-        func copyAlias() -> Bool {
+        do {
+            try fileManager.linkItem(at: sourceURL, to: targetURL)
+        } catch {
             do {
                 try fileManager.copyItem(at: sourceURL, to: targetURL)
-                return true
             } catch {
-                return false
+                AppLogger.error(
+                    "Failed to create feed asset alias \(targetURL.lastPathComponent)",
+                    category: "feed"
+                )
             }
         }
-
-        try? fileManager.removeItem(at: targetURL)
-        if createHardLink() { return }
-
-        try? fileManager.removeItem(at: targetURL)
-        if createHardLink() { return }
-
-        if copyAlias() { return }
-
-        try? fileManager.removeItem(at: targetURL)
-        if copyAlias() { return }
-
-        AppLogger.error(
-            "Failed to create feed asset alias \(targetURL.lastPathComponent)",
-            category: "feed"
-        )
     }
 }
 

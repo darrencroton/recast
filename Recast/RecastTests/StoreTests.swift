@@ -564,7 +564,7 @@ final class StoreTests: XCTestCase {
         let chID = UUID()
         let ep = makeEpisode(channelID: chID, videoID: "v1", fileName: "v1.mp3")
         store.episodes = [ep]
-        let episodesDir = Paths.episodesDir(in: tempDir)
+        let episodesDir = Paths.ensureEpisodesDirectory(in: tempDir)
         let mp3Path = episodesDir.appendingPathComponent("v1.mp3")
         try Data("fake".utf8).write(to: mp3Path)
         XCTAssertTrue(FileManager.default.fileExists(atPath: mp3Path.path))
@@ -640,7 +640,7 @@ final class StoreTests: XCTestCase {
         let chID = UUID()
         let ep = makeEpisode(channelID: chID, videoID: "v1", fileName: "v1.mp3")
         store.episodes = [ep]
-        let mp3Path = Paths.episodesDir(in: tempDir).appendingPathComponent("v1.mp3")
+        let mp3Path = Paths.ensureEpisodesDirectory(in: tempDir).appendingPathComponent("v1.mp3")
         try Data("fake".utf8).write(to: mp3Path)
 
         store.removeEpisodeDownloads([ep.id])
@@ -654,7 +654,7 @@ final class StoreTests: XCTestCase {
         let chID = UUID()
         let ep = makeEpisode(channelID: chID, videoID: "v1", fileName: "v1.mp3")
         store.episodes = [ep]
-        let mp3Path = Paths.episodesDir(in: tempDir).appendingPathComponent("v1.mp3")
+        let mp3Path = Paths.ensureEpisodesDirectory(in: tempDir).appendingPathComponent("v1.mp3")
         try Data("fake".utf8).write(to: mp3Path)
         XCTAssertTrue(FileManager.default.fileExists(atPath: mp3Path.path))
 
@@ -996,7 +996,7 @@ final class StoreTests: XCTestCase {
         let channel = makeChannel()
         let episode = makeEpisode(channelID: channel.id, videoID: "partial")
         store.channels = [channel]
-        let episodesDir = Paths.episodesDir(in: tempDir)
+        let episodesDir = Paths.ensureEpisodesDirectory(in: tempDir)
 
         let matchingWebm = episodesDir.appendingPathComponent("\(String(episode.suggestedFileName.dropLast(4))).webm")
         let matchingMP3 = episodesDir.appendingPathComponent(episode.suggestedFileName)
