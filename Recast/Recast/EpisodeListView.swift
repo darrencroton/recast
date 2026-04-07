@@ -6,6 +6,7 @@ struct EpisodeListView: View {
     let searchQuery: String
     @Binding var filterMode: EpisodeFilter
     @Binding var selectedEpisodeIDs: Set<UUID>
+    let onRequestDeleteEpisodes: (Set<UUID>) -> Void
     let onActivateSelection: () -> Void
 
     private var episodes: [Episode] {
@@ -144,7 +145,9 @@ struct EpisodeListView: View {
                 Divider()
 
                 Button {
-                    store.removeEpisodeDownloads(targetIDs)
+                    Task {
+                        await store.removeEpisodeDownloads(targetIDs)
+                    }
                 } label: {
                     Label(
                         targetIDs.count == 1 ? "Remove Download" : "Remove Downloads",
@@ -156,8 +159,9 @@ struct EpisodeListView: View {
             Divider()
 
             Button(role: .destructive) {
-                store.deleteEpisodes(targetIDs)
-                selectedEpisodeIDs.subtract(targetIDs)
+                selectedEpisodeIDs = targetIDs
+                onActivateSelection()
+                onRequestDeleteEpisodes(targetIDs)
             } label: {
                 Label(
                     targetIDs.count == 1 ? "Delete Episode" : "Delete Selected Episodes",

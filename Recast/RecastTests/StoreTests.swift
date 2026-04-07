@@ -578,17 +578,17 @@ final class StoreTests: XCTestCase {
 
     // MARK: - deleteEpisodes
 
-    func test_deleteEpisodes_removesFromList() {
+    func test_deleteEpisodes_removesFromList() async {
         let chID = UUID()
         let ep1 = makeEpisode(channelID: chID, videoID: "v1")
         let ep2 = makeEpisode(channelID: chID, videoID: "v2")
         store.episodes = [ep1, ep2]
-        store.deleteEpisodes([ep1.id])
+        await store.deleteEpisodes([ep1.id])
         XCTAssertEqual(store.episodes.count, 1)
         XCTAssertEqual(store.episodes[0].videoID, "v2")
     }
 
-    func test_deleteEpisodes_removesMP3File() throws {
+    func test_deleteEpisodes_removesMP3File() async throws {
         let chID = UUID()
         let ep = makeEpisode(channelID: chID, videoID: "v1", fileName: "v1.mp3")
         store.episodes = [ep]
@@ -597,11 +597,11 @@ final class StoreTests: XCTestCase {
         try Data("fake".utf8).write(to: mp3Path)
         XCTAssertTrue(FileManager.default.fileExists(atPath: mp3Path.path))
 
-        store.deleteEpisodes([ep.id])
+        await store.deleteEpisodes([ep.id])
         XCTAssertFalse(FileManager.default.fileExists(atPath: mp3Path.path))
     }
 
-    func test_deleteEpisodes_removesSharedArtwork() throws {
+    func test_deleteEpisodes_removesSharedArtwork() async throws {
         let chID = UUID()
         let ep = makeEpisode(channelID: chID, videoID: "v1", fileName: "v1.mp3")
         store.episodes = [ep]
@@ -609,12 +609,12 @@ final class StoreTests: XCTestCase {
         try FileManager.default.createDirectory(at: artworkPath.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("fake".utf8).write(to: artworkPath)
 
-        store.deleteEpisodes([ep.id])
+        await store.deleteEpisodes([ep.id])
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: artworkPath.path))
     }
 
-    func test_deleteEpisodes_removesEmptySingleEpisodeSource() {
+    func test_deleteEpisodes_removesEmptySingleEpisodeSource() async {
         let source = Channel(
             url: "https://www.youtube.com/watch?v=solo123",
             name: "Solo Creator",
@@ -625,13 +625,13 @@ final class StoreTests: XCTestCase {
         store.channels = [source]
         store.episodes = [episode]
 
-        store.deleteEpisodes([episode.id])
+        await store.deleteEpisodes([episode.id])
 
         XCTAssertTrue(store.channels.isEmpty)
         XCTAssertTrue(store.episodes.isEmpty)
     }
 
-    func test_deleteEpisodes_removesNestedMP3File() throws {
+    func test_deleteEpisodes_removesNestedMP3File() async throws {
         let channel = makeChannel(name: "Science Weekly")
         let relativePath = Paths.relativeEpisodePath(forFileName: "v1.mp3", in: channel)
         let ep = makeEpisode(channelID: channel.id, videoID: "v1", fileName: relativePath)
@@ -642,28 +642,64 @@ final class StoreTests: XCTestCase {
         try Data("fake".utf8).write(to: mp3Path)
         XCTAssertTrue(FileManager.default.fileExists(atPath: mp3Path.path))
 
-        store.deleteEpisodes([ep.id])
+        await store.deleteEpisodes([ep.id])
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: mp3Path.path))
     }
 
+    func test_deleteEpisodes_clearsQueuedDownloadStatus() async {
+        let channel = makeChannel()
+        let episode = makeEpisode(channelID: channel.id, videoID: "queued-delete")
+        store.channels = [channel]
+        store.episodes = [episode]
+        store.activeDownloadStatus[episode.videoID] = DownloadStatus(progress: 0, phase: .queued)
+
+        await store.deleteEpisodes([episode.id])
+
+        XCTAssertTrue(store.activeDownloadStatus.isEmpty)
+        XCTAssertTrue(store.episodes.isEmpty)
+    }
+
+    func test_deleteEpisodes_doesNotRemoveMatchingStemFromOtherChannelDirectory() async throws {
+        let deletedChannel = makeChannel(name: "Delete Me")
+        let keptChannel = makeChannel(name: "Keep Me")
+        let deletedRelativePath = Paths.relativeEpisodePath(forFileName: "shared-name.mp3", in: deletedChannel)
+        let keptRelativePath = Paths.relativeEpisodePath(forFileName: "shared-name.mp3", in: keptChannel)
+        let deletedEpisode = makeEpisode(channelID: deletedChannel.id, videoID: "delete-me", fileName: deletedRelativePath)
+        let keptEpisode = makeEpisode(channelID: keptChannel.id, videoID: "keep-me", fileName: keptRelativePath)
+        store.channels = [deletedChannel, keptChannel]
+        store.episodes = [deletedEpisode, keptEpisode]
+
+        let deletedURL = Paths.episodeFileURL(forRelativePath: deletedRelativePath, in: tempDir)
+        let keptURL = Paths.episodeFileURL(forRelativePath: keptRelativePath, in: tempDir)
+        try FileManager.default.createDirectory(at: deletedURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: keptURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("delete".utf8).write(to: deletedURL)
+        try Data("keep".utf8).write(to: keptURL)
+
+        await store.deleteEpisodes([deletedEpisode.id])
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: deletedURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: keptURL.path))
+    }
+
     // MARK: - removeEpisodeDownloads
 
-    func test_removeEpisodeDownloads_keepsEpisodeInList() throws {
+    func test_removeEpisodeDownloads_keepsEpisodeInList() async throws {
         let chID = UUID()
         let ep = makeEpisode(channelID: chID, videoID: "v1", fileName: "v1.mp3")
         store.episodes = [ep]
         let mp3Path = Paths.ensureEpisodesDirectory(in: tempDir).appendingPathComponent("v1.mp3")
         try Data("fake".utf8).write(to: mp3Path)
 
-        store.removeEpisodeDownloads([ep.id])
+        await store.removeEpisodeDownloads([ep.id])
 
         XCTAssertEqual(store.episodes.count, 1, "Episode should remain in list")
         XCTAssertNil(store.episodes[0].fileName, "fileName should be cleared")
         XCTAssertFalse(store.episodes[0].isDownloaded, "isDownloaded should be false")
     }
 
-    func test_removeEpisodeDownloads_deletesMP3File() throws {
+    func test_removeEpisodeDownloads_deletesMP3File() async throws {
         let chID = UUID()
         let ep = makeEpisode(channelID: chID, videoID: "v1", fileName: "v1.mp3")
         store.episodes = [ep]
@@ -671,12 +707,12 @@ final class StoreTests: XCTestCase {
         try Data("fake".utf8).write(to: mp3Path)
         XCTAssertTrue(FileManager.default.fileExists(atPath: mp3Path.path))
 
-        store.removeEpisodeDownloads([ep.id])
+        await store.removeEpisodeDownloads([ep.id])
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: mp3Path.path), "MP3 file should be deleted from disk")
     }
 
-    func test_removeEpisodeDownloads_deletesSharedArtwork() throws {
+    func test_removeEpisodeDownloads_deletesSharedArtwork() async throws {
         let chID = UUID()
         let ep = makeEpisode(channelID: chID, videoID: "v1", fileName: "v1.mp3")
         store.episodes = [ep]
@@ -684,34 +720,34 @@ final class StoreTests: XCTestCase {
         try FileManager.default.createDirectory(at: artworkPath.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("art".utf8).write(to: artworkPath)
 
-        store.removeEpisodeDownloads([ep.id])
+        await store.removeEpisodeDownloads([ep.id])
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: artworkPath.path), "Artwork should be deleted from shared storage")
     }
 
-    func test_removeEpisodeDownloads_ignoresNonDownloadedEpisodes() {
+    func test_removeEpisodeDownloads_ignoresNonDownloadedEpisodes() async {
         let chID = UUID()
         let ep = makeEpisode(channelID: chID, videoID: "v1") // no fileName
         store.episodes = [ep]
 
-        store.removeEpisodeDownloads([ep.id])
+        await store.removeEpisodeDownloads([ep.id])
 
         XCTAssertEqual(store.episodes.count, 1, "Episode should remain in list")
         XCTAssertNil(store.episodes[0].fileName, "fileName should still be nil")
     }
 
-    // MARK: - removeChannels
+    // MARK: - deleteChannels
 
-    func test_removeChannels_removesEpisodes() {
+    func test_deleteChannels_removesEpisodes() async {
         let ch = makeChannel()
         store.channels = [ch]
         store.episodes = [makeEpisode(channelID: ch.id, videoID: "v1")]
-        store.removeChannels([ch.id])
+        await store.deleteChannels([ch.id])
         XCTAssertTrue(store.channels.isEmpty)
         XCTAssertTrue(store.episodes.isEmpty)
     }
 
-    func test_removeChannels_removesManagedFilesArtworkAndChannelDirectory() throws {
+    func test_deleteChannels_removesManagedFilesArtworkAndChannelDirectory() async throws {
         let channel = makeChannel(name: "Science Weekly")
         let relativePath = Paths.relativeEpisodePath(forFileName: "episode.mp3", in: channel)
         let episode = makeEpisode(channelID: channel.id, videoID: "episode123", fileName: relativePath)
@@ -728,7 +764,7 @@ final class StoreTests: XCTestCase {
         )
         try Data("shared".utf8).write(to: sharedArtworkURL)
 
-        store.removeChannels([channel.id])
+        await store.deleteChannels([channel.id])
 
         XCTAssertFalse(FileManager.default.fileExists(atPath: episodeFileURL.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: sidecarArtworkURL.path))

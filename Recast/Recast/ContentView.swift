@@ -185,7 +185,9 @@ struct ContentView: View {
         }
         .alert(deleteConfirmationTitle, isPresented: $showDeleteConfirmation) {
             Button(deleteConfirmationButtonLabel, role: .destructive) {
-                deleteSelection(pendingDeletion)
+                Task {
+                    await deleteSelection(pendingDeletion)
+                }
             }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -272,6 +274,9 @@ struct ContentView: View {
                         searchQuery: searchQuery,
                         filterMode: $episodeFilter,
                         selectedEpisodeIDs: $selectedEpisodeIDs,
+                        onRequestDeleteEpisodes: { ids in
+                            requestDeletion(.episodes(ids))
+                        },
                         onActivateSelection: {
                             focusedPane = .episodes
                         }
@@ -366,8 +371,7 @@ struct ContentView: View {
 
     private var deleteSelectionButton: some View {
         Button(role: .destructive) {
-            pendingDeletion = selectionContext
-            showDeleteConfirmation = true
+            requestDeletion(selectionContext)
         } label: {
             Label("Delete", systemImage: "trash")
         }
@@ -414,7 +418,7 @@ struct ContentView: View {
     private var deleteButtonHelpText: String {
         switch selectionContext {
         case .channels:
-            return "Remove the selected sources"
+            return "Delete the selected sources and downloads"
         case .episodes:
             let hasDownloads = selectedVisibleEpisodes.contains { $0.isDownloaded }
             if hasDownloads {
@@ -430,7 +434,7 @@ struct ContentView: View {
     private var deleteConfirmationTitle: String {
         switch pendingDeletion {
         case .channels(let ids):
-            return ids.count == 1 ? "Remove Source?" : "Remove \(ids.count) Sources?"
+            return ids.count == 1 ? "Delete Source?" : "Delete \(ids.count) Sources?"
         case .episodes(let ids):
             return ids.count == 1 ? "Delete Episode?" : "Delete \(ids.count) Episodes?"
         case .none:
@@ -442,8 +446,8 @@ struct ContentView: View {
         switch pendingDeletion {
         case .channels(let ids):
             return ids.count == 1
-                ? "The source will be removed from Recast. Any downloaded files will remain on disk."
-                : "The selected sources will be removed from Recast. Any downloaded files will remain on disk."
+                ? "This deletes the source, its episodes, and downloaded files."
+                : "This deletes the sources, their episodes, and downloaded files."
         case .episodes(let ids):
             let hasDownloads = store.episodes.filter { ids.contains($0.id) }.contains { $0.isDownloaded }
             if hasDownloads {
@@ -457,12 +461,7 @@ struct ContentView: View {
     }
 
     private var deleteConfirmationButtonLabel: String {
-        switch pendingDeletion {
-        case .channels:
-            return "Remove"
-        case .episodes, .none:
-            return "Delete"
-        }
+        "Delete"
     }
 
     private func refreshChannelsFromToolbar() {
@@ -477,12 +476,20 @@ struct ContentView: View {
         }
     }
 
-    private func deleteSelection(_ context: SelectionActionContext? = nil) {
+    private func requestDeletion(_ context: SelectionActionContext) {
+        guard case .none = context else {
+            pendingDeletion = context
+            showDeleteConfirmation = true
+            return
+        }
+    }
+
+    private func deleteSelection(_ context: SelectionActionContext? = nil) async {
         switch context ?? selectionContext {
         case .channels(let ids):
-            deleteChannels(ids)
+            await deleteChannels(ids)
         case .episodes(let ids):
-            deleteEpisodes(ids)
+            await deleteEpisodes(ids)
         case .none:
             break
         }
@@ -520,19 +527,19 @@ struct ContentView: View {
         focusedPane = .episodes
     }
 
-    private func deleteChannels(_ ids: Set<UUID>) {
+    private func deleteChannels(_ ids: Set<UUID>) async {
         guard !ids.isEmpty else { return }
+        await store.deleteChannels(ids)
         withAnimation {
-            store.removeChannels(ids)
             selection.subtract(ids.map { SidebarItem.channel($0) })
         }
         selectedEpisodeIDs.removeAll()
         focusedPane = .sidebar
     }
 
-    private func deleteEpisodes(_ ids: Set<UUID>) {
+    private func deleteEpisodes(_ ids: Set<UUID>) async {
         guard !ids.isEmpty else { return }
-        store.deleteEpisodes(ids)
+        await store.deleteEpisodes(ids)
         selectedEpisodeIDs.subtract(ids)
     }
 
@@ -562,7 +569,7 @@ struct ContentView: View {
         }
 
         Button(role: .destructive) {
-            deleteChannels(targetIDs)
+            requestDeletion(.channels(targetIDs))
         } label: {
             Label(
                 targetIDs.count == 1 ? "Delete Source" : "Delete Selected Sources",

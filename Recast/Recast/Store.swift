@@ -359,13 +359,18 @@ final class AppStore {
         }
     }
 
-    func removeChannels(_ ids: Set<UUID>) {
-        AppLogger.info("Removing \(ids.count) channel(s)", category: "channels")
+    @MainActor
+    func deleteChannels(_ ids: Set<UUID>) async {
+        let targetChannels = channels.filter { ids.contains($0.id) }
         let targetEpisodes = episodes.filter { ids.contains($0.channelID) }
-        removeManagedEpisodeArtifacts(for: targetEpisodes, channels: channels, in: episodesDirectory)
-        removeManagedEpisodesDirectoryIfEmptyAndOwned(at: episodesDirectory)
+        guard !targetChannels.isEmpty else { return }
+        guard await cancelDownloadsAffectingEpisodes(targetEpisodes, reason: "delete") else { return }
+
+        AppLogger.info("Deleting \(ids.count) channel(s)", category: "channels")
+        deleteManagedChannelArtifacts(for: targetChannels, episodes: targetEpisodes, in: episodesDirectory)
         episodes.removeAll { ids.contains($0.channelID) }
         channels.removeAll { ids.contains($0.id) }
+        removeManagedEpisodesDirectoryIfEmptyAndOwned(at: episodesDirectory)
         save()
         regenerateFeed()
     }
@@ -459,27 +464,40 @@ final class AppStore {
     @MainActor
     func downloadEpisode(_ episode: Episode, operationToken: UInt64? = nil) async {
         let operationToken = operationToken ?? operationGeneration
-        let existingStatus = activeDownloadStatus[episode.videoID]
+        guard let currentEpisode = episodes.first(where: { $0.id == episode.id }) else {
+            activeDownloadStatus.removeValue(forKey: episode.videoID)
+            if activeDownloadStatus.isEmpty {
+                isStoppingDownloads = false
+            }
+            return
+        }
+        let existingStatus = activeDownloadStatus[currentEpisode.videoID]
         guard isCurrentOperation(operationToken) else { return }
-        guard !activeDownloads.contains(episode.videoID), !episode.isDownloaded else { return }
+        guard !activeDownloads.contains(currentEpisode.videoID), !currentEpisode.isDownloaded else { return }
         guard existingStatus == nil || existingStatus?.phase == .queued else { return }
-        guard let channel = channels.first(where: { $0.id == episode.channelID }) else {
-            statusMessage = "Failed: \(episode.title.prefix(40)) — Missing channel"
-            AppLogger.error("Download failed for \(episode.videoID): missing channel \(episode.channelID)", category: "download")
+        guard let channel = channels.first(where: { $0.id == currentEpisode.channelID }) else {
+            statusMessage = "Failed: \(currentEpisode.title.prefix(40)) — Missing channel"
+            AppLogger.error(
+                "Download failed for \(currentEpisode.videoID): missing channel \(currentEpisode.channelID)",
+                category: "download"
+            )
             return
         }
         let episodesDir = Paths.ensureManagedChannelEpisodesDirectory(for: channel, in: episodesDirectory)
-        let videoID = episode.videoID
+        let videoID = currentEpisode.videoID
 
         activeDownloads.insert(videoID)
         activeDownloadStatus[videoID] = DownloadStatus(progress: 0, phase: .preparing)
         isStoppingDownloads = false
-        statusMessage = "Downloading: \(episode.title.prefix(50))…"
-        AppLogger.info("Downloading episode \(episode.videoID) as \(episode.suggestedFileName)", category: "download")
+        statusMessage = "Downloading: \(currentEpisode.title.prefix(50))…"
+        AppLogger.info(
+            "Downloading episode \(currentEpisode.videoID) as \(currentEpisode.suggestedFileName)",
+            category: "download"
+        )
 
         do {
             let fileName = try await downloader.downloadAudio(
-                episode: episode,
+                episode: currentEpisode,
                 to: episodesDir
             ) { [weak self] update in
                 Task { @MainActor [weak self, videoID, operationToken] in
@@ -495,16 +513,16 @@ final class AppStore {
             if let idx = episodes.firstIndex(where: { $0.videoID == videoID }) {
                 episodes[idx].fileName = relativePath
             }
-            statusMessage = "Downloaded: \(episode.title.prefix(50))"
-            AppLogger.info("Downloaded episode \(episode.videoID) to \(relativePath)", category: "download")
+            statusMessage = "Downloaded: \(currentEpisode.title.prefix(50))"
+            AppLogger.info("Downloaded episode \(currentEpisode.videoID) to \(relativePath)", category: "download")
         } catch DownloaderError.cancelled {
             guard isCurrentOperation(operationToken) else { return }
-            statusMessage = "Stopped: \(episode.title.prefix(50))"
-            AppLogger.info("Stopped download for \(episode.videoID)", category: "download")
+            statusMessage = "Stopped: \(currentEpisode.title.prefix(50))"
+            AppLogger.info("Stopped download for \(currentEpisode.videoID)", category: "download")
         } catch {
             guard isCurrentOperation(operationToken) else { return }
-            statusMessage = "Failed: \(episode.title.prefix(40)) — \(error.localizedDescription)"
-            AppLogger.error("Download failed for \(episode.videoID): \(error.localizedDescription)", category: "download")
+            statusMessage = "Failed: \(currentEpisode.title.prefix(40)) — \(error.localizedDescription)"
+            AppLogger.error("Download failed for \(currentEpisode.videoID): \(error.localizedDescription)", category: "download")
         }
 
         guard isCurrentOperation(operationToken) else { return }
@@ -570,28 +588,37 @@ final class AppStore {
 
     // MARK: - Episode management
 
-    func deleteEpisodes(_ ids: Set<UUID>) {
-        AppLogger.info("Deleting \(ids.count) episode(s)", category: "episodes")
+    @MainActor
+    func deleteEpisodes(_ ids: Set<UUID>) async {
         let targetEpisodes = episodes.filter { ids.contains($0.id) }
-        removeManagedEpisodeArtifacts(for: targetEpisodes, channels: channels, in: episodesDirectory)
-        removeManagedEpisodesDirectoryIfEmptyAndOwned(at: episodesDirectory)
+        guard !targetEpisodes.isEmpty else { return }
+        guard await cancelDownloadsAffectingEpisodes(targetEpisodes, reason: "delete") else { return }
+
+        AppLogger.info("Deleting \(ids.count) episode(s)", category: "episodes")
+        let affectedDirectories = deleteManagedEpisodeArtifacts(for: targetEpisodes, channels: channels, in: episodesDirectory)
         episodes.removeAll { ids.contains($0.id) }
         pruneEmptySingleEpisodeSources()
+        removeDirectoriesIfEmpty(affectedDirectories)
+        removeManagedEpisodesDirectoryIfEmptyAndOwned(at: episodesDirectory)
         save()
         regenerateFeed()
     }
 
-    func removeEpisodeDownloads(_ ids: Set<UUID>) {
+    @MainActor
+    func removeEpisodeDownloads(_ ids: Set<UUID>) async {
         let targetEpisodes = episodes.filter { ids.contains($0.id) && $0.isDownloaded }
         guard !targetEpisodes.isEmpty else { return }
+        guard await cancelDownloadsAffectingEpisodes(targetEpisodes, reason: "remove") else { return }
+
         AppLogger.info("Removing downloads for \(targetEpisodes.count) episode(s)", category: "episodes")
-        removeManagedEpisodeArtifacts(for: targetEpisodes, channels: channels, in: episodesDirectory)
-        removeManagedEpisodesDirectoryIfEmptyAndOwned(at: episodesDirectory)
+        let affectedDirectories = deleteManagedEpisodeArtifacts(for: targetEpisodes, channels: channels, in: episodesDirectory)
         for id in ids {
             if let idx = episodes.firstIndex(where: { $0.id == id }) {
                 episodes[idx].fileName = nil
             }
         }
+        removeDirectoriesIfEmpty(affectedDirectories)
+        removeManagedEpisodesDirectoryIfEmptyAndOwned(at: episodesDirectory)
         save()
         regenerateFeed()
     }
@@ -988,8 +1015,13 @@ final class AppStore {
 
         let previousEpisodesDirectory = episodesDirectory
         let previousEpisodes = episodes
-        removeManagedEpisodeArtifacts(for: previousEpisodes, channels: channels, in: previousEpisodesDirectory)
+        let affectedDirectories = deleteManagedEpisodeArtifacts(
+            for: previousEpisodes,
+            channels: channels,
+            in: previousEpisodesDirectory
+        )
         try? FileManager.default.removeItem(at: Paths.syncDirectoryURL(in: previousEpisodesDirectory))
+        removeDirectoriesIfEmpty(affectedDirectories)
         removeManagedEpisodesDirectoryIfEmptyAndOwned(at: previousEpisodesDirectory)
         removeManagedFeedArtifacts(in: feedDirectory)
         removeManagedAppSupportArtifacts(removeStateFile: true)
@@ -1171,66 +1203,126 @@ final class AppStore {
         }
     }
 
-    private func removeManagedEpisodeArtifacts(for episodes: [Episode], channels: [Channel], in episodesDirectory: URL) {
+    @MainActor
+    private func cancelDownloadsAffectingEpisodes(_ episodes: [Episode], reason: String) async -> Bool {
+        let videoIDs = Set(episodes.map(\.videoID))
+        guard !videoIDs.isEmpty else { return true }
+
+        let queuedVideoIDs = videoIDs.filter { activeDownloadStatus[$0]?.phase == .queued }
+        for videoID in queuedVideoIDs {
+            activeDownloadStatus.removeValue(forKey: videoID)
+        }
+
+        let activeVideoIDs = activeDownloads.intersection(videoIDs)
+        guard !activeVideoIDs.isEmpty else {
+            if activeDownloadStatus.isEmpty {
+                isStoppingDownloads = false
+            }
+            return true
+        }
+
+        isStoppingDownloads = true
+        statusMessage = activeVideoIDs.count == 1
+            ? "Stopping download before \(reason)…"
+            : "Stopping downloads before \(reason)…"
+        AppLogger.info(
+            "Stopping \(activeVideoIDs.count) active download(s) before \(reason)",
+            category: "download"
+        )
+
+        for videoID in activeVideoIDs {
+            await downloader.cancelDownload(videoID: videoID)
+        }
+
+        guard await waitForDownloadsToStop(activeVideoIDs) else {
+            statusMessage = "Couldn't stop download to complete \(reason)"
+            AppLogger.warning(
+                "Timed out stopping download(s) before \(reason): \(activeVideoIDs.joined(separator: ", "))",
+                category: "download"
+            )
+            return false
+        }
+
+        if activeDownloadStatus.isEmpty {
+            isStoppingDownloads = false
+        }
+        return true
+    }
+
+    @MainActor
+    private func waitForDownloadsToStop(_ videoIDs: Set<String>, timeoutNanoseconds: UInt64 = 5_000_000_000) async -> Bool {
+        let deadline = DispatchTime.now().uptimeNanoseconds + timeoutNanoseconds
+        while !activeDownloads.isDisjoint(with: videoIDs) && DispatchTime.now().uptimeNanoseconds < deadline {
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
+        return activeDownloads.isDisjoint(with: videoIDs)
+    }
+
+    private func deleteManagedChannelArtifacts(for channels: [Channel], episodes: [Episode], in episodesDirectory: URL) {
         let fileManager = FileManager.default
-        let downloadedFileURLs = Set(
-            episodes.compactMap { episode in
-                episode.fileName.map { Paths.episodeFileURL(forRelativePath: $0, in: episodesDirectory) }
-            }
-        )
-        for fileURL in downloadedFileURLs {
-            if fileManager.fileExists(atPath: fileURL.path) {
-                try? fileManager.removeItem(at: fileURL)
+        let _ = deleteManagedEpisodeArtifacts(for: episodes, channels: channels, in: episodesDirectory)
+
+        for channel in channels {
+            let channelDir = Paths.channelEpisodesDir(for: channel, in: episodesDirectory)
+            if fileManager.fileExists(atPath: channelDir.path) {
+                try? fileManager.removeItem(at: channelDir)
             }
         }
+    }
 
-        let sharedArtworkURLs = Set(
-            episodes.map { episode in
-                Paths.sharedArtworkURL(forVideoID: episode.videoID, in: episodesDirectory)
-            }
-        )
-        for artworkURL in sharedArtworkURLs {
-            if fileManager.fileExists(atPath: artworkURL.path) {
-                try? fileManager.removeItem(at: artworkURL)
-            }
-        }
-
+    private func deleteManagedEpisodeArtifacts(for episodes: [Episode], channels: [Channel], in episodesDirectory: URL) -> Set<URL> {
         let channelsByID = Dictionary(uniqueKeysWithValues: channels.map { ($0.id, $0) })
-        var managedPrefixesByDirectory: [URL: Set<String>] = [episodesDirectory: []]
+        var affectedDirectories = Set<URL>()
+
         for episode in episodes {
-            let suggestedPrefix = String(episode.suggestedFileName.dropLast(4))
-            managedPrefixesByDirectory[episodesDirectory, default: []].insert(suggestedPrefix)
             if let fileName = episode.fileName {
                 let storedFileURL = Paths.episodeFileURL(forRelativePath: fileName, in: episodesDirectory)
-                let storedPrefix = storedFileURL.deletingPathExtension().lastPathComponent
-                managedPrefixesByDirectory[storedFileURL.deletingLastPathComponent(), default: []].insert(storedPrefix)
-            }
-            if let channel = channelsByID[episode.channelID] {
+                let directory = storedFileURL.deletingLastPathComponent()
+                affectedDirectories.insert(directory)
+                removeItemIfPresent(storedFileURL)
+                removeItemIfPresent(Paths.managedEpisodeArtworkURL(forRelativeEpisodePath: fileName, in: episodesDirectory))
+                removeSiblingArtifacts(matchingStem: storedFileURL.deletingPathExtension().lastPathComponent, in: directory)
+            } else if let channel = channelsByID[episode.channelID] {
                 let channelDir = Paths.channelEpisodesDir(for: channel, in: episodesDirectory)
-                managedPrefixesByDirectory[channelDir, default: []].insert(suggestedPrefix)
+                affectedDirectories.insert(channelDir)
+                removeSiblingArtifacts(matchingStem: String(episode.suggestedFileName.dropLast(4)), in: channelDir)
+                affectedDirectories.insert(episodesDirectory)
+                removeSiblingArtifacts(matchingStem: String(episode.suggestedFileName.dropLast(4)), in: episodesDirectory)
             }
+
+            let artworkURL = Paths.sharedArtworkURL(forVideoID: episode.videoID, in: episodesDirectory)
+            removeItemIfPresent(artworkURL)
         }
 
-        for (directory, managedPrefixes) in managedPrefixesByDirectory {
-            guard fileManager.fileExists(atPath: directory.path) else { continue }
-            guard let contents = try? fileManager.contentsOfDirectory(
-                at: directory,
-                includingPropertiesForKeys: nil,
-                options: []
-            ) else {
-                continue
-            }
+        return affectedDirectories
+    }
 
-            for url in contents where managedPrefixes.contains(where: { url.lastPathComponent.hasPrefix($0) }) {
-                try? fileManager.removeItem(at: url)
-            }
+    private func removeSiblingArtifacts(matchingStem stem: String, in directory: URL) {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: directory.path) else { return }
+        guard let contents = try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        ) else {
+            return
+        }
+
+        for url in contents where url.lastPathComponent.hasPrefix("\(stem).") {
+            try? fileManager.removeItem(at: url)
+        }
+    }
+
+    private func removeItemIfPresent(_ url: URL) {
+        let fileManager = FileManager.default
+        if fileManager.fileExists(atPath: url.path) {
+            try? fileManager.removeItem(at: url)
         }
     }
 
     private func removeManagedEpisodesDirectoryIfEmptyAndOwned(at episodesDir: URL) {
         let fileManager = FileManager.default
         guard fileManager.fileExists(atPath: episodesDir.path) else { return }
-        removeEmptyManagedEpisodeSubdirectories(in: episodesDir)
 
         let markerFile = episodesDir.appendingPathComponent(Paths.managedEpisodesMarkerFileName)
         guard fileManager.fileExists(atPath: markerFile.path) else { return }
@@ -1247,26 +1339,22 @@ final class AppStore {
         try? fileManager.removeItem(at: episodesDir)
     }
 
-    private func removeEmptyManagedEpisodeSubdirectories(in episodesDir: URL) {
-        let fileManager = FileManager.default
-        guard let contents = try? fileManager.contentsOfDirectory(
-            at: episodesDir,
-            includingPropertiesForKeys: [.isDirectoryKey],
-            options: [.skipsHiddenFiles]
-        ) else {
-            return
+    private func removeDirectoriesIfEmpty(_ directories: Set<URL>) {
+        for directory in directories {
+            removeDirectoryIfEmpty(directory)
         }
+    }
 
-        for url in contents {
-            guard (try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true else { continue }
-            let childContents = (try? fileManager.contentsOfDirectory(
-                at: url,
-                includingPropertiesForKeys: nil,
-                options: [.skipsHiddenFiles]
-            )) ?? []
-            guard childContents.isEmpty else { continue }
-            try? fileManager.removeItem(at: url)
-        }
+    private func removeDirectoryIfEmpty(_ directory: URL) {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: directory.path) else { return }
+        let contents = (try? fileManager.contentsOfDirectory(
+            at: directory,
+            includingPropertiesForKeys: nil,
+            options: [.skipsHiddenFiles]
+        )) ?? []
+        guard contents.isEmpty else { return }
+        try? fileManager.removeItem(at: directory)
     }
 
     private func isManagedFeed(at feedFile: URL) -> Bool {
