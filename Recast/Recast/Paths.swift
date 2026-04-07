@@ -5,6 +5,7 @@ enum Paths {
     static let managedEpisodesMarkerFileName = ".recast-owned"
     static let showArtworkFileName = "show-cover.jpg"
     static let feedAssetsDirectoryName = "feed-assets"
+    static let sharedArtworkDirectoryName = "artwork"
     static let serverDirectoryName = "server"
 
     static var appSupport: URL {
@@ -24,7 +25,7 @@ enum Paths {
         appSupport.appendingPathComponent("state.json")
     }
 
-    // MARK: - Shared sync state (lives inside the episodes directory for cloud sync)
+    // MARK: - Shared sync data (lives inside the episodes directory for cloud sync)
 
     static let syncDirectoryName = ".recast"
 
@@ -40,6 +41,16 @@ enum Paths {
 
     static func sharedStateFile(in episodesDir: URL) -> URL {
         syncDirectoryURL(in: episodesDir).appendingPathComponent("shared-state.json")
+    }
+
+    static func sharedArtworkDirectoryURL(in episodesDir: URL) -> URL {
+        syncDirectoryURL(in: episodesDir).appendingPathComponent(sharedArtworkDirectoryName, isDirectory: true)
+    }
+
+    static func ensureSharedArtworkDirectory(in episodesDir: URL) -> URL {
+        let dir = sharedArtworkDirectoryURL(in: episodesDir)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir
     }
 
     static var logsDir: URL {
@@ -141,6 +152,10 @@ enum Paths {
 
     static func feedArtworkFileName(forVideoID videoID: String) -> String {
         "\(videoID).jpg"
+    }
+
+    static func sharedArtworkURL(forVideoID videoID: String, in episodesDir: URL) -> URL {
+        sharedArtworkDirectoryURL(in: episodesDir).appendingPathComponent(feedArtworkFileName(forVideoID: videoID))
     }
 
     static func feedAudioURL(forVideoID videoID: String, in feedDir: URL) -> URL {

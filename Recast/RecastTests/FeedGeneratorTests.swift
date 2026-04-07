@@ -49,6 +49,12 @@ final class FeedGeneratorTests: XCTestCase {
         return try String(contentsOf: feedURL, encoding: .utf8)
     }
 
+    private func createSharedArtworkFile(videoID: String) throws {
+        let artworkURL = Paths.sharedArtworkURL(forVideoID: videoID, in: tempDir)
+        try FileManager.default.createDirectory(at: artworkURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("jpg".utf8).write(to: artworkURL)
+    }
+
     // MARK: - xmlEscape
 
     func test_xmlEscape_ampersand() {
@@ -236,9 +242,7 @@ final class FeedGeneratorTests: XCTestCase {
     func test_write_includesItemArtworkWhenFeedArtworkExists() throws {
         let channel = makeChannel()
         let ep = makeEpisode(channelID: channel.id, videoID: "art001", fileName: "art001.mp3")
-        let artworkURL = Paths.feedArtworkURL(forVideoID: ep.videoID, in: tempDir)
-        try FileManager.default.createDirectory(at: artworkURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data("jpg".utf8).write(to: artworkURL)
+        try createSharedArtworkFile(videoID: ep.videoID)
 
         FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
 
@@ -249,9 +253,7 @@ final class FeedGeneratorTests: XCTestCase {
         let channel = makeChannel(name: "Science Weekly")
         let relativePath = Paths.relativeEpisodePath(forFileName: "art001.mp3", in: channel)
         let ep = makeEpisode(channelID: channel.id, videoID: "art001", fileName: relativePath)
-        let artworkURL = Paths.feedArtworkURL(forVideoID: ep.videoID, in: tempDir)
-        try FileManager.default.createDirectory(at: artworkURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data("jpg".utf8).write(to: artworkURL)
+        try createSharedArtworkFile(videoID: ep.videoID)
 
         FeedGenerator.write(episodes: [ep], channels: [channel], baseURL: "http://localhost:8888", episodesDirectory: tempDir, to: tempDir)
 

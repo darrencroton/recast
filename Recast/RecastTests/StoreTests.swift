@@ -71,8 +71,8 @@ final class StoreTests: XCTestCase {
         return fileURL
     }
 
-    private func createArtworkFile(videoID: String, width: Int, height: Int) throws -> URL {
-        let artworkURL = Paths.feedArtworkURL(forVideoID: videoID, in: feedDir)
+    private func createSharedArtworkFile(videoID: String, width: Int, height: Int) throws -> URL {
+        let artworkURL = Paths.sharedArtworkURL(forVideoID: videoID, in: store.episodesDirectory)
         try FileManager.default.createDirectory(
             at: artworkURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -102,6 +102,16 @@ final class StoreTests: XCTestCase {
 
         let data = try XCTUnwrap(bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.9]))
         try data.write(to: artworkURL)
+        return artworkURL
+    }
+
+    private func createLocalFeedArtworkFile(videoID: String, contents: Data = Data("jpg".utf8)) throws -> URL {
+        let artworkURL = Paths.feedArtworkURL(forVideoID: videoID, in: feedDir)
+        try FileManager.default.createDirectory(
+            at: artworkURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try contents.write(to: artworkURL)
         return artworkURL
     }
 
@@ -291,7 +301,7 @@ final class StoreTests: XCTestCase {
         let channel = makeChannel(name: "Science Weekly")
         let relativePath = Paths.relativeEpisodePath(forFileName: "episode.mp3", in: channel)
         _ = try createDownloadedEpisodeFile(named: relativePath)
-        let artworkURL = try createArtworkFile(videoID: "episode", width: 1280, height: 720)
+        let artworkURL = try createSharedArtworkFile(videoID: "episode", width: 1280, height: 720)
         let episode = makeEpisode(channelID: channel.id, videoID: "episode", fileName: relativePath)
         store.channels = [channel]
         store.episodes = [episode]
@@ -308,7 +318,7 @@ final class StoreTests: XCTestCase {
         let channel = makeChannel(name: "Science Weekly")
         let relativePath = Paths.relativeEpisodePath(forFileName: "episode.mp3", in: channel)
         let sourceAudioURL = try createDownloadedEpisodeFile(named: relativePath)
-        let sourceArtworkURL = try createArtworkFile(videoID: "episode123", width: 1400, height: 1400)
+        let sourceArtworkURL = try createSharedArtworkFile(videoID: "episode123", width: 1400, height: 1400)
         let episode = makeEpisode(channelID: channel.id, videoID: "episode123", fileName: relativePath)
         store.channels = [channel]
         store.episodes = [episode]
@@ -573,11 +583,11 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: mp3Path.path))
     }
 
-    func test_deleteEpisodes_removesFeedArtwork() throws {
+    func test_deleteEpisodes_removesSharedArtwork() throws {
         let chID = UUID()
         let ep = makeEpisode(channelID: chID, videoID: "v1", fileName: "v1.mp3")
         store.episodes = [ep]
-        let artworkPath = Paths.feedArtworkURL(forVideoID: ep.videoID, in: feedDir)
+        let artworkPath = Paths.sharedArtworkURL(forVideoID: ep.videoID, in: tempDir)
         try FileManager.default.createDirectory(at: artworkPath.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("fake".utf8).write(to: artworkPath)
 
@@ -663,6 +673,19 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: mp3Path.path), "MP3 file should be deleted from disk")
     }
 
+    func test_removeEpisodeDownloads_deletesSharedArtwork() throws {
+        let chID = UUID()
+        let ep = makeEpisode(channelID: chID, videoID: "v1", fileName: "v1.mp3")
+        store.episodes = [ep]
+        let artworkPath = Paths.sharedArtworkURL(forVideoID: ep.videoID, in: tempDir)
+        try FileManager.default.createDirectory(at: artworkPath.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data("art".utf8).write(to: artworkPath)
+
+        store.removeEpisodeDownloads([ep.id])
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: artworkPath.path), "Artwork should be deleted from shared storage")
+    }
+
     func test_removeEpisodeDownloads_ignoresNonDownloadedEpisodes() {
         let chID = UUID()
         let ep = makeEpisode(channelID: chID, videoID: "v1") // no fileName
@@ -691,8 +714,8 @@ final class StoreTests: XCTestCase {
         let newer = makeEpisode(channelID: channel.id, videoID: "newer", daysAgo: 1, fileName: "newer.mp3")
         store.channels = [channel]
         store.episodes = [older, newer]
-        let olderArtwork = Paths.feedArtworkURL(forVideoID: "older", in: feedDir)
-        let newerArtwork = Paths.feedArtworkURL(forVideoID: "newer", in: feedDir)
+        let olderArtwork = Paths.sharedArtworkURL(forVideoID: "older", in: tempDir)
+        let newerArtwork = Paths.sharedArtworkURL(forVideoID: "newer", in: tempDir)
         try FileManager.default.createDirectory(at: olderArtwork.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("old".utf8).write(to: olderArtwork)
         try Data("new".utf8).write(to: newerArtwork)
@@ -700,7 +723,7 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.channelArtworkURL(for: channel.id)?.lastPathComponent, "newer.jpg")
     }
 
-    func test_regenerateFeed_migratesLegacyEpisodeArtworkIntoFeedAssets() throws {
+    func test_regenerateFeed_migratesLegacyEpisodeArtworkIntoSharedArtwork() throws {
         let channel = makeChannel(name: "Science Weekly")
         let relativePath = Paths.relativeEpisodePath(forFileName: "episode.mp3", in: channel)
         _ = try createDownloadedEpisodeFile(named: relativePath)
@@ -716,9 +739,65 @@ final class StoreTests: XCTestCase {
 
         store.regenerateFeed()
 
-        let canonicalArtworkURL = Paths.feedArtworkURL(forVideoID: "episode123", in: feedDir)
+        let canonicalArtworkURL = Paths.sharedArtworkURL(forVideoID: "episode123", in: tempDir)
+        let feedArtworkURL = Paths.feedArtworkURL(forVideoID: "episode123", in: feedDir)
         XCTAssertTrue(FileManager.default.fileExists(atPath: canonicalArtworkURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: feedArtworkURL.path))
         XCTAssertFalse(FileManager.default.fileExists(atPath: legacyArtworkURL.path))
+    }
+
+    func test_regenerateFeed_migratesExistingLocalFeedArtworkIntoSharedArtwork() throws {
+        let channel = makeChannel(name: "Science Weekly")
+        let relativePath = Paths.relativeEpisodePath(forFileName: "episode.mp3", in: channel)
+        _ = try createDownloadedEpisodeFile(named: relativePath)
+        let localFeedArtworkURL = try createLocalFeedArtworkFile(videoID: "episode123", contents: Data("local".utf8))
+        let episode = makeEpisode(channelID: channel.id, videoID: "episode123", fileName: relativePath)
+        store.channels = [channel]
+        store.episodes = [episode]
+
+        store.regenerateFeed()
+
+        let sharedArtworkURL = Paths.sharedArtworkURL(forVideoID: "episode123", in: tempDir)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sharedArtworkURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: localFeedArtworkURL.path))
+        XCTAssertEqual(try Data(contentsOf: sharedArtworkURL), Data("local".utf8))
+    }
+
+    func test_sharedArtworkVisibleFromSecondMachineAndRegeneratesLocalFeedArtwork() throws {
+        let channel = makeChannel(name: "Machine A Channel")
+        let relativePath = Paths.relativeEpisodePath(forFileName: "machine-a.mp3", in: channel)
+        store.episodesDirectory = defaultEpisodesDir
+        _ = try createDownloadedEpisodeFile(named: relativePath)
+        let episode = makeEpisode(channelID: channel.id, videoID: "machineA1", fileName: relativePath)
+        store.channels = [channel]
+        store.episodes = [episode]
+        _ = try createSharedArtworkFile(videoID: episode.videoID, width: 1400, height: 1400)
+        store.save()
+
+        let machineBAppSupport = tempDir.appendingPathComponent("machine-b-app-support", isDirectory: true)
+        try FileManager.default.createDirectory(at: machineBAppSupport, withIntermediateDirectories: true)
+        let machineBStateFile = machineBAppSupport.appendingPathComponent("state.json")
+        let machineBLocalData = try JSONSerialization.data(withJSONObject: [
+            "episodesDirectory": defaultEpisodesDir.path,
+            "serverPort": 9999,
+            "autoFetchInterval": 0,
+            "autoStartServer": false,
+        ] as [String: Any])
+        try machineBLocalData.write(to: machineBStateFile)
+
+        let machineBStore = AppStore(
+            stateFileURL: machineBStateFile,
+            appSupportURL: machineBAppSupport,
+            defaultEpisodesDirectory: defaultEpisodesDir,
+            shouldLoadPersistentState: true,
+            autoCheckDependencies: false
+        )
+
+        let sharedArtworkURL = Paths.sharedArtworkURL(forVideoID: episode.videoID, in: defaultEpisodesDir)
+        let machineBFeedArtworkURL = Paths.feedArtworkURL(forVideoID: episode.videoID, in: Paths.serverDirectory(in: machineBAppSupport))
+        XCTAssertEqual(machineBStore.artworkURL(for: episode)?.path, sharedArtworkURL.path)
+        XCTAssertEqual(machineBStore.channelArtworkURL(for: channel.id)?.path, sharedArtworkURL.path)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: machineBFeedArtworkURL.path))
     }
 
     // MARK: - feedURL
@@ -761,7 +840,7 @@ final class StoreTests: XCTestCase {
         let orphanEpisode = makeEpisode(channelID: UUID(), videoID: "orphan")
 
         try writeLocalState([
-            "episodesDirectory": tempDir.path,
+            "episodesDirectory": defaultEpisodesDir.path,
             "serverPort": 8888,
             "autoFetchInterval": 0,
             "autoStartServer": false,
@@ -793,7 +872,7 @@ final class StoreTests: XCTestCase {
                     "isPlayed": orphanEpisode.isPlayed,
                 ],
             ],
-        ], in: tempDir)
+        ], in: defaultEpisodesDir)
 
         let loadedStore = AppStore(
             stateFileURL: tempStateFile,
@@ -869,6 +948,7 @@ final class StoreTests: XCTestCase {
     func test_saveAndLoad_preservesChannelsAndEpisodesViaSharedState() {
         let channel = makeChannel()
         let episode = makeEpisode(channelID: channel.id, videoID: "sync1")
+        store.episodesDirectory = defaultEpisodesDir
         store.channels = [channel]
         store.episodes = [episode]
 
@@ -892,6 +972,7 @@ final class StoreTests: XCTestCase {
         // Simulate Machine A: save channels and episodes to the shared episodes directory.
         let channel = makeChannel(name: "Machine A Channel")
         let episode = makeEpisode(channelID: channel.id, videoID: "machineA1")
+        store.episodesDirectory = defaultEpisodesDir
         store.channels = [channel]
         store.episodes = [episode]
         store.save()
@@ -900,7 +981,7 @@ final class StoreTests: XCTestCase {
         // but with different machine-specific settings (e.g. different server port).
         let machineBStateFile = tempDir.appendingPathComponent("machine-b-state.json")
         let machineBLocalData = try JSONSerialization.data(withJSONObject: [
-            "episodesDirectory": tempDir.path,
+            "episodesDirectory": defaultEpisodesDir.path,
             "serverPort": 9999,
             "autoFetchInterval": 0,
             "autoStartServer": false,
@@ -1135,7 +1216,7 @@ final class StoreTests: XCTestCase {
 
         let channelDir = Paths.ensureManagedChannelEpisodesDirectory(for: channel, in: customEpisodesDir)
         let audioFile = Paths.episodeFileURL(forRelativePath: relativePath, in: customEpisodesDir)
-        let artworkFile = Paths.feedArtworkURL(forVideoID: downloadedEpisode.videoID, in: feedDir)
+        let artworkFile = Paths.sharedArtworkURL(forVideoID: downloadedEpisode.videoID, in: customEpisodesDir)
         try Data("audio".utf8).write(to: audioFile)
         try FileManager.default.createDirectory(at: artworkFile.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Data("art".utf8).write(to: artworkFile)

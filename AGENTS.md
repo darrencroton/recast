@@ -32,7 +32,6 @@ recast/
 │   │   ├── ModelTests.swift
 │   │   └── StoreTests.swift
 │   └── scripts/
-│       ├── migrate-to-split-state.swift  Run once before first launch of new version to migrate state
 │       └── render_app_icon.swift
 ├── Recast.app                  Generated Release app bundle after setup
 └── README.md
@@ -47,11 +46,11 @@ recast/
 - **FeedGenerator**: produces RSS 2.0 with iTunes podcast extensions
 - **Server address**: `serverHost` (persisted, default empty) overrides the auto-detected local IP. `resolvedHost` returns `serverHost` if set, otherwise falls back to `localIPAddress ?? "localhost"`. All feed URLs and the generated feed XML use `resolvedHost`. This allows users to configure a Tailscale IP or other custom address.
 - **Local state** (machine-specific settings: server port/host, auto-fetch interval, episodes directory path) persists to `~/Library/Application Support/Recast/state.json`
-- **Shared state** (channels and episodes — the data that should be the same on every machine) persists to `<episodesDirectory>/.recast/shared-state.json`. Because `episodesDirectory` can point to a cloud-synced folder (iCloud Drive, Dropbox, etc.), this file is automatically shared between Macs without any additional infrastructure.
+- **Shared state** (channels and episodes — the data that should be the same on every machine) persists to `<episodesDirectory>/.recast/shared-state.json`. Downloaded episode artwork persists alongside it under `<episodesDirectory>/.recast/artwork/`. Because `episodesDirectory` can point to a cloud-synced folder (iCloud Drive, Dropbox, etc.), these shared artifacts sync automatically between Macs without any additional infrastructure.
 - Diagnostics log at `~/Library/Application Support/Recast/logs/recast.log`
-- Feed/server artifacts live under `~/Library/Application Support/Recast/server/`
+- Feed/server artifacts live under `~/Library/Application Support/Recast/server/` and are regenerated locally from the shared state, shared artwork, and shared MP3 files
 - Audio files are saved to the configured episodes folder directly, under `<Channel Name [id]>/` at that root (default root: `~/Music/Recast/`)
-- The `.recast/` hidden directory inside the episodes folder is system-managed; users should not need to know it exists
+- The `.recast/` hidden directory inside the episodes folder is system-managed; it holds synced metadata and artwork, and users should not need to manage it directly
 
 ## Setup & Build
 

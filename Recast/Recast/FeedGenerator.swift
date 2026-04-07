@@ -22,7 +22,7 @@ enum FeedGenerator {
             let filePath = Paths.episodeFileURL(forRelativePath: fileName, in: episodesDirectory)
             let fileSize = (try? FileManager.default.attributesOfItem(atPath: filePath.path)[.size] as? Int) ?? 0
             let channelName = channels.first(where: { $0.id == ep.channelID })?.name ?? "Unknown"
-            let artworkURL = Paths.feedArtworkURL(forVideoID: ep.videoID, in: feedDirectory)
+            let artworkURL = Paths.sharedArtworkURL(forVideoID: ep.videoID, in: episodesDirectory)
             let artworkElement = if FileManager.default.fileExists(atPath: artworkURL.path) {
                 "\n                  <itunes:image href=\"\(xmlEscape(feedAssetURL(baseURL: baseURL, fileName: Paths.feedArtworkFileName(forVideoID: ep.videoID))))\"/>"
             } else {
