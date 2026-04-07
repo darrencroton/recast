@@ -93,20 +93,6 @@ struct Channel: Identifiable, Codable, Hashable {
     var isSingleEpisodeSource: Bool {
         sourceKind == .singleEpisode
     }
-
-    enum CodingKeys: String, CodingKey {
-        case id, url, name, dateAdded, sourceKind, relatedCollectionURL
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(UUID.self, forKey: .id)
-        url = try c.decode(String.self, forKey: .url)
-        name = try c.decode(String.self, forKey: .name)
-        dateAdded = try c.decode(Date.self, forKey: .dateAdded)
-        sourceKind = try c.decodeIfPresent(ChannelSourceKind.self, forKey: .sourceKind) ?? .collection
-        relatedCollectionURL = try c.decodeIfPresent(String.self, forKey: .relatedCollectionURL)
-    }
 }
 
 struct Episode: Identifiable, Codable, Hashable {
@@ -131,24 +117,6 @@ struct Episode: Identifiable, Codable, Hashable {
         self.durationSeconds = durationSeconds
         self.isPlayed = false
         self.isNew = false
-    }
-
-    // Backwards-compatible decoding: isPlayed defaults to false if missing
-    enum CodingKeys: String, CodingKey {
-        case id, channelID, videoID, title, publishDate, durationSeconds, fileName, isPlayed, isNew
-    }
-
-    init(from decoder: Decoder) throws {
-        let c = try decoder.container(keyedBy: CodingKeys.self)
-        id = try c.decode(UUID.self, forKey: .id)
-        channelID = try c.decode(UUID.self, forKey: .channelID)
-        videoID = try c.decode(String.self, forKey: .videoID)
-        title = try c.decode(String.self, forKey: .title)
-        publishDate = try c.decode(Date.self, forKey: .publishDate)
-        durationSeconds = try c.decode(Int.self, forKey: .durationSeconds)
-        fileName = try c.decodeIfPresent(String.self, forKey: .fileName)
-        isPlayed = try c.decodeIfPresent(Bool.self, forKey: .isPlayed) ?? false
-        isNew = try c.decodeIfPresent(Bool.self, forKey: .isNew) ?? false
     }
 
     var formattedDuration: String {
@@ -190,9 +158,5 @@ struct Episode: Identifiable, Codable, Hashable {
             components.month ?? 1,
             components.day ?? 1
         )
-    }
-
-    static func artworkFileName(forEpisodeFileName fileName: String) -> String {
-        "\((fileName as NSString).deletingPathExtension).jpg"
     }
 }

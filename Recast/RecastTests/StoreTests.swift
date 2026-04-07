@@ -105,16 +105,6 @@ final class StoreTests: XCTestCase {
         return artworkURL
     }
 
-    private func createLocalFeedArtworkFile(videoID: String, contents: Data = Data("jpg".utf8)) throws -> URL {
-        let artworkURL = Paths.feedArtworkURL(forVideoID: videoID, in: feedDir)
-        try FileManager.default.createDirectory(
-            at: artworkURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try contents.write(to: artworkURL)
-        return artworkURL
-    }
-
     // MARK: - normalizeYouTubeURL: mobile → desktop
 
     func test_normalize_mobileScheme_convertedToDesktop() {
@@ -629,21 +619,6 @@ final class StoreTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: mp3Path.path))
     }
 
-    func test_deleteEpisodes_removesNestedLegacyArtworkSidecar() throws {
-        let channel = makeChannel(name: "Science Weekly")
-        let relativePath = Paths.relativeEpisodePath(forFileName: "v1.mp3", in: channel)
-        let ep = makeEpisode(channelID: channel.id, videoID: "v1", fileName: relativePath)
-        store.channels = [channel]
-        store.episodes = [ep]
-        let artworkPath = Paths.legacyArtworkURL(forEpisodeFileName: relativePath, in: tempDir)
-        try FileManager.default.createDirectory(at: artworkPath.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data("fake".utf8).write(to: artworkPath)
-
-        store.deleteEpisodes([ep.id])
-
-        XCTAssertFalse(FileManager.default.fileExists(atPath: artworkPath.path))
-    }
-
     // MARK: - removeEpisodeDownloads
 
     func test_removeEpisodeDownloads_keepsEpisodeInList() throws {
@@ -721,46 +696,6 @@ final class StoreTests: XCTestCase {
         try Data("new".utf8).write(to: newerArtwork)
 
         XCTAssertEqual(store.channelArtworkURL(for: channel.id)?.lastPathComponent, "newer.jpg")
-    }
-
-    func test_regenerateFeed_migratesLegacyEpisodeArtworkIntoSharedArtwork() throws {
-        let channel = makeChannel(name: "Science Weekly")
-        let relativePath = Paths.relativeEpisodePath(forFileName: "episode.mp3", in: channel)
-        _ = try createDownloadedEpisodeFile(named: relativePath)
-        let legacyArtworkURL = Paths.legacyArtworkURL(forEpisodeFileName: relativePath, in: tempDir)
-        try FileManager.default.createDirectory(
-            at: legacyArtworkURL.deletingLastPathComponent(),
-            withIntermediateDirectories: true
-        )
-        try Data("legacy".utf8).write(to: legacyArtworkURL)
-        let episode = makeEpisode(channelID: channel.id, videoID: "episode123", fileName: relativePath)
-        store.channels = [channel]
-        store.episodes = [episode]
-
-        store.regenerateFeed()
-
-        let canonicalArtworkURL = Paths.sharedArtworkURL(forVideoID: "episode123", in: tempDir)
-        let feedArtworkURL = Paths.feedArtworkURL(forVideoID: "episode123", in: feedDir)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: canonicalArtworkURL.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: feedArtworkURL.path))
-        XCTAssertFalse(FileManager.default.fileExists(atPath: legacyArtworkURL.path))
-    }
-
-    func test_regenerateFeed_migratesExistingLocalFeedArtworkIntoSharedArtwork() throws {
-        let channel = makeChannel(name: "Science Weekly")
-        let relativePath = Paths.relativeEpisodePath(forFileName: "episode.mp3", in: channel)
-        _ = try createDownloadedEpisodeFile(named: relativePath)
-        let localFeedArtworkURL = try createLocalFeedArtworkFile(videoID: "episode123", contents: Data("local".utf8))
-        let episode = makeEpisode(channelID: channel.id, videoID: "episode123", fileName: relativePath)
-        store.channels = [channel]
-        store.episodes = [episode]
-
-        store.regenerateFeed()
-
-        let sharedArtworkURL = Paths.sharedArtworkURL(forVideoID: "episode123", in: tempDir)
-        XCTAssertTrue(FileManager.default.fileExists(atPath: sharedArtworkURL.path))
-        XCTAssertTrue(FileManager.default.fileExists(atPath: localFeedArtworkURL.path))
-        XCTAssertEqual(try Data(contentsOf: sharedArtworkURL), Data("local".utf8))
     }
 
     func test_sharedArtworkVisibleFromSecondMachineAndRegeneratesLocalFeedArtwork() throws {
@@ -851,6 +786,7 @@ final class StoreTests: XCTestCase {
                 "url": validChannel.url,
                 "name": validChannel.name,
                 "dateAdded": validChannel.dateAdded.timeIntervalSince1970,
+                "sourceKind": validChannel.sourceKind.rawValue,
             ]],
             "episodes": [
                 [
@@ -861,6 +797,7 @@ final class StoreTests: XCTestCase {
                     "publishDate": validEpisode.publishDate.timeIntervalSince1970,
                     "durationSeconds": validEpisode.durationSeconds,
                     "isPlayed": validEpisode.isPlayed,
+                    "isNew": validEpisode.isNew,
                 ],
                 [
                     "id": orphanEpisode.id.uuidString,
@@ -870,6 +807,7 @@ final class StoreTests: XCTestCase {
                     "publishDate": orphanEpisode.publishDate.timeIntervalSince1970,
                     "durationSeconds": orphanEpisode.durationSeconds,
                     "isPlayed": orphanEpisode.isPlayed,
+                    "isNew": orphanEpisode.isNew,
                 ],
             ],
         ], in: defaultEpisodesDir)
@@ -1013,11 +951,12 @@ final class StoreTests: XCTestCase {
         let episode = makeEpisode(channelID: channel.id, videoID: "cloud1")
         try writeSharedState([
             "channels": [["id": channel.id.uuidString, "url": channel.url,
-                          "name": channel.name, "dateAdded": channel.dateAdded.timeIntervalSince1970]],
+                          "name": channel.name, "dateAdded": channel.dateAdded.timeIntervalSince1970,
+                          "sourceKind": channel.sourceKind.rawValue]],
             "episodes": [["id": episode.id.uuidString, "channelID": episode.channelID.uuidString,
                           "videoID": episode.videoID, "title": episode.title,
                           "publishDate": episode.publishDate.timeIntervalSince1970,
-                          "durationSeconds": episode.durationSeconds, "isPlayed": false]],
+                          "durationSeconds": episode.durationSeconds, "isPlayed": false, "isNew": false]],
         ], in: cloudDir)
 
         // Fresh-install store starts empty; switching to the cloud dir should load its shared state.
@@ -1038,7 +977,8 @@ final class StoreTests: XCTestCase {
         let channel = makeChannel(name: "Existing Channel")
         try writeSharedState([
             "channels": [["id": channel.id.uuidString, "url": channel.url,
-                          "name": channel.name, "dateAdded": channel.dateAdded.timeIntervalSince1970]],
+                          "name": channel.name, "dateAdded": channel.dateAdded.timeIntervalSince1970,
+                          "sourceKind": channel.sourceKind.rawValue]],
             "episodes": [],
         ], in: cloudDir)
 

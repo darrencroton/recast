@@ -77,57 +77,6 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(episode.suggestedFileName, "1970-01-01 - A B C D [safe42].mp3")
     }
 
-    func testArtworkFileName_matchesMP3Stem() {
-        var episode = Episode(
-            channelID: UUID(),
-            videoID: "cover1",
-            title: "Covered Episode",
-            publishDate: Date(timeIntervalSince1970: 0),
-            durationSeconds: 60
-        )
-        episode.fileName = "1970-01-01 - Covered Episode [cover1].mp3"
-
-        XCTAssertEqual(Episode.artworkFileName(forEpisodeFileName: episode.fileName!), "1970-01-01 - Covered Episode [cover1].jpg")
-    }
-
-    func testArtworkFileName_preservesRelativeChannelFolder() {
-        var episode = Episode(
-            channelID: UUID(),
-            videoID: "cover2",
-            title: "Covered Episode",
-            publishDate: Date(timeIntervalSince1970: 0),
-            durationSeconds: 60
-        )
-        episode.fileName = "Channel Folder [abc12345]/1970-01-01 - Covered Episode [cover2].mp3"
-
-        XCTAssertEqual(
-            Episode.artworkFileName(forEpisodeFileName: episode.fileName!),
-            "Channel Folder [abc12345]/1970-01-01 - Covered Episode [cover2].jpg"
-        )
-    }
-
-    // MARK: - Episode Codable (backwards compatibility)
-
-    func testEpisodeDecodesWithoutIsPlayed() throws {
-        // Simulates old state.json without isPlayed field
-        let json = """
-        {
-            "id": "11111111-1111-1111-1111-111111111111",
-            "channelID": "22222222-2222-2222-2222-222222222222",
-            "videoID": "testVid",
-            "title": "Old Episode",
-            "publishDate": 0,
-            "durationSeconds": 300
-        }
-        """
-        let data = json.data(using: .utf8)!
-        let ep = try JSONDecoder().decode(Episode.self, from: data)
-        XCTAssertEqual(ep.videoID, "testVid")
-        XCTAssertFalse(ep.isPlayed) // defaults to false
-        XCTAssertFalse(ep.isNew)
-        XCTAssertNil(ep.fileName)
-    }
-
     func testEpisodeDecodesWithIsPlayed() throws {
         let json = """
         {
@@ -138,6 +87,7 @@ final class ModelTests: XCTestCase {
             "publishDate": 0,
             "durationSeconds": 300,
             "isPlayed": true,
+            "isNew": false,
             "fileName": "testVid.mp3"
         }
         """
@@ -158,6 +108,7 @@ final class ModelTests: XCTestCase {
             "title": "Fresh Episode",
             "publishDate": 0,
             "durationSeconds": 300,
+            "isPlayed": false,
             "isNew": true
         }
         """
@@ -201,23 +152,6 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(decoded.url, ch.url)
         XCTAssertEqual(decoded.name, ch.name)
         XCTAssertEqual(decoded.sourceKind, .collection)
-    }
-
-    func testChannelDecodesWithoutSourceKind_defaultsToCollection() throws {
-        let json = """
-        {
-            "id": "11111111-1111-1111-1111-111111111111",
-            "url": "https://www.youtube.com/@ch/videos",
-            "name": "Legacy Channel",
-            "dateAdded": 0
-        }
-        """
-
-        let data = json.data(using: .utf8)!
-        let channel = try JSONDecoder().decode(Channel.self, from: data)
-
-        XCTAssertEqual(channel.sourceKind, .collection)
-        XCTAssertNil(channel.relatedCollectionURL)
     }
 
     func testChannelCodableRoundTrip_preservesSingleEpisodeMetadata() throws {
