@@ -361,6 +361,9 @@ final class AppStore {
 
     func removeChannels(_ ids: Set<UUID>) {
         AppLogger.info("Removing \(ids.count) channel(s)", category: "channels")
+        let targetEpisodes = episodes.filter { ids.contains($0.channelID) }
+        removeManagedEpisodeArtifacts(for: targetEpisodes, channels: channels, in: episodesDirectory)
+        removeManagedEpisodesDirectoryIfEmptyAndOwned(at: episodesDirectory)
         episodes.removeAll { ids.contains($0.channelID) }
         channels.removeAll { ids.contains($0.id) }
         save()
@@ -692,6 +695,7 @@ final class AppStore {
     func regenerateFeed() {
         let baseURL = serverBaseURL
         let downloaded = sortEpisodesNewestFirst(validEpisodes.filter(\.isDownloaded))
+        syncDownloadedEpisodeArtworkToSharedStorage(downloaded)
         normalizeDownloadedEpisodeArtwork(downloaded)
         ShowArtwork.ensureExists(in: feedDirectory)
         FeedAssetLinks.sync(
@@ -1194,11 +1198,16 @@ final class AppStore {
         let channelsByID = Dictionary(uniqueKeysWithValues: channels.map { ($0.id, $0) })
         var managedPrefixesByDirectory: [URL: Set<String>] = [episodesDirectory: []]
         for episode in episodes {
-            let prefix = String(episode.suggestedFileName.dropLast(4))
-            managedPrefixesByDirectory[episodesDirectory, default: []].insert(prefix)
+            let suggestedPrefix = String(episode.suggestedFileName.dropLast(4))
+            managedPrefixesByDirectory[episodesDirectory, default: []].insert(suggestedPrefix)
+            if let fileName = episode.fileName {
+                let storedFileURL = Paths.episodeFileURL(forRelativePath: fileName, in: episodesDirectory)
+                let storedPrefix = storedFileURL.deletingPathExtension().lastPathComponent
+                managedPrefixesByDirectory[storedFileURL.deletingLastPathComponent(), default: []].insert(storedPrefix)
+            }
             if let channel = channelsByID[episode.channelID] {
                 let channelDir = Paths.channelEpisodesDir(for: channel, in: episodesDirectory)
-                managedPrefixesByDirectory[channelDir, default: []].insert(prefix)
+                managedPrefixesByDirectory[channelDir, default: []].insert(suggestedPrefix)
             }
         }
 
@@ -1277,6 +1286,62 @@ final class AppStore {
             let artworkURL = Paths.sharedArtworkURL(forVideoID: episode.videoID, in: episodesDirectory)
             guard FileManager.default.fileExists(atPath: artworkURL.path) else { continue }
             EpisodeArtwork.ensurePodcastReady(at: artworkURL)
+        }
+    }
+
+    private func syncDownloadedEpisodeArtworkToSharedStorage(_ downloadedEpisodes: [Episode]) {
+        guard !downloadedEpisodes.isEmpty else { return }
+        let fileManager = FileManager.default
+        _ = Paths.ensureSharedArtworkDirectory(in: episodesDirectory)
+
+        for episode in downloadedEpisodes {
+            guard let fileName = episode.fileName else { continue }
+
+            let sharedArtworkURL = Paths.sharedArtworkURL(forVideoID: episode.videoID, in: episodesDirectory)
+            let sidecarArtworkURL = Paths.managedEpisodeArtworkURL(forRelativeEpisodePath: fileName, in: episodesDirectory)
+            let feedArtworkURL = Paths.feedArtworkURL(forVideoID: episode.videoID, in: feedDirectory)
+
+            if fileManager.fileExists(atPath: sharedArtworkURL.path) {
+                if fileManager.fileExists(atPath: sidecarArtworkURL.path) {
+                    try? fileManager.removeItem(at: sidecarArtworkURL)
+                }
+                continue
+            }
+
+            if moveArtworkIfPresent(from: sidecarArtworkURL, to: sharedArtworkURL, videoID: episode.videoID) {
+                continue
+            }
+
+            _ = moveArtworkIfPresent(from: feedArtworkURL, to: sharedArtworkURL, videoID: episode.videoID)
+        }
+    }
+
+    @discardableResult
+    private func moveArtworkIfPresent(from sourceURL: URL, to targetURL: URL, videoID: String) -> Bool {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: sourceURL.path) else { return false }
+
+        do {
+            if fileManager.fileExists(atPath: targetURL.path) {
+                try fileManager.removeItem(at: targetURL)
+            }
+            try fileManager.moveItem(at: sourceURL, to: targetURL)
+            return true
+        } catch {
+            do {
+                if fileManager.fileExists(atPath: targetURL.path) {
+                    try fileManager.removeItem(at: targetURL)
+                }
+                try fileManager.copyItem(at: sourceURL, to: targetURL)
+                try? fileManager.removeItem(at: sourceURL)
+                return true
+            } catch {
+                AppLogger.error(
+                    "Failed to sync artwork for \(videoID): \(error.localizedDescription)",
+                    category: "feed"
+                )
+                return false
+            }
         }
     }
 

@@ -121,6 +121,12 @@ enum Paths {
         episodesDir.appendingPathComponent(relativePath)
     }
 
+    static func managedEpisodeArtworkURL(forRelativeEpisodePath relativePath: String, in episodesDir: URL) -> URL {
+        let episodeURL = episodeFileURL(forRelativePath: relativePath, in: episodesDir)
+        let artworkFileName = "\(episodeURL.deletingPathExtension().lastPathComponent).jpg"
+        return episodeURL.deletingLastPathComponent().appendingPathComponent(artworkFileName)
+    }
+
     static func feedFileURL(in feedDir: URL) -> URL {
         feedDir.appendingPathComponent("feed.xml")
     }

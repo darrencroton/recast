@@ -332,6 +332,34 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(artworkAliasValues.fileSize, sourceArtworkValues.fileSize)
     }
 
+    func test_regenerateFeed_movesManagedEpisodeSidecarArtworkIntoSharedStorage() throws {
+        let channel = makeChannel(name: "Science Weekly")
+        let relativePath = Paths.relativeEpisodePath(forFileName: "episode.mp3", in: channel)
+        _ = try createDownloadedEpisodeFile(named: relativePath)
+
+        let sidecarArtworkURL = Paths.managedEpisodeArtworkURL(forRelativeEpisodePath: relativePath, in: tempDir)
+        try FileManager.default.createDirectory(
+            at: sidecarArtworkURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("jpg".utf8).write(to: sidecarArtworkURL)
+
+        let episode = makeEpisode(channelID: channel.id, videoID: "episode123", fileName: relativePath)
+        store.channels = [channel]
+        store.episodes = [episode]
+
+        store.regenerateFeed()
+
+        let sharedArtworkURL = Paths.sharedArtworkURL(forVideoID: episode.videoID, in: tempDir)
+        let feedArtworkURL = Paths.feedArtworkURL(forVideoID: episode.videoID, in: feedDir)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sidecarArtworkURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: sharedArtworkURL.path))
+        XCTAssertTrue(FileManager.default.fileExists(atPath: feedArtworkURL.path))
+        XCTAssertEqual(store.artworkURL(for: episode)?.path, sharedArtworkURL.path)
+        XCTAssertEqual(store.channelArtworkURL(for: channel.id)?.path, sharedArtworkURL.path)
+    }
+
     func test_regenerateFeed_onlyDownloadedEpisodesInFeed() throws {
         let channel = makeChannel()
         let downloaded = makeEpisode(channelID: channel.id, videoID: "dl1", fileName: "dl1.mp3")
@@ -679,6 +707,33 @@ final class StoreTests: XCTestCase {
         store.channels = [ch]
         store.episodes = [makeEpisode(channelID: ch.id, videoID: "v1")]
         store.removeChannels([ch.id])
+        XCTAssertTrue(store.channels.isEmpty)
+        XCTAssertTrue(store.episodes.isEmpty)
+    }
+
+    func test_removeChannels_removesManagedFilesArtworkAndChannelDirectory() throws {
+        let channel = makeChannel(name: "Science Weekly")
+        let relativePath = Paths.relativeEpisodePath(forFileName: "episode.mp3", in: channel)
+        let episode = makeEpisode(channelID: channel.id, videoID: "episode123", fileName: relativePath)
+        store.channels = [channel]
+        store.episodes = [episode]
+
+        let episodeFileURL = try createDownloadedEpisodeFile(named: relativePath)
+        let sidecarArtworkURL = Paths.managedEpisodeArtworkURL(forRelativeEpisodePath: relativePath, in: tempDir)
+        try Data("jpg".utf8).write(to: sidecarArtworkURL)
+        let sharedArtworkURL = Paths.sharedArtworkURL(forVideoID: episode.videoID, in: tempDir)
+        try FileManager.default.createDirectory(
+            at: sharedArtworkURL.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try Data("shared".utf8).write(to: sharedArtworkURL)
+
+        store.removeChannels([channel.id])
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: episodeFileURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sidecarArtworkURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sharedArtworkURL.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: Paths.channelEpisodesDir(for: channel, in: tempDir).path))
         XCTAssertTrue(store.channels.isEmpty)
         XCTAssertTrue(store.episodes.isEmpty)
     }
