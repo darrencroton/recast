@@ -22,15 +22,11 @@ private enum MenuBarIcon {
 @MainActor
 struct AppLifecycleRuntime {
     var activateApp: () -> Void
-    var showSettingsWindow: () -> Void
     var terminate: () -> Void
 
     static let live = AppLifecycleRuntime(
         activateApp: {
             NSApp.activate(ignoringOtherApps: true)
-        },
-        showSettingsWindow: {
-            NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
         },
         terminate: {
             NSApp.terminate(nil)
@@ -66,11 +62,6 @@ final class AppLifecycleController {
         runtime.activateApp()
     }
 
-    func openSettings() {
-        runtime.showSettingsWindow()
-        runtime.activateApp()
-    }
-
     func quitRecast() {
         runtime.terminate()
     }
@@ -102,8 +93,8 @@ private struct RecastMenuBarMenu: View {
             }
         }
 
-        Button("Settings…") {
-            lifecycleController.openSettings()
+        SettingsLink {
+            Text("Settings…")
         }
 
         Divider()

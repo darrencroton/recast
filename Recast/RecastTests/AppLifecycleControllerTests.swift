@@ -45,27 +45,6 @@ final class AppLifecycleControllerTests: XCTestCase {
         XCTAssertEqual(activationCount, 1)
     }
 
-    func test_openSettings_opensSettingsAndActivatesApp() {
-        var didOpenSettings = false
-        var activationCount = 0
-        let controller = AppLifecycleController(
-            launchHandler: {},
-            runtime: makeRuntime(
-                activateApp: {
-                    activationCount += 1
-                },
-                showSettingsWindow: {
-                    didOpenSettings = true
-                }
-            )
-        )
-
-        controller.openSettings()
-
-        XCTAssertTrue(didOpenSettings)
-        XCTAssertEqual(activationCount, 1)
-    }
-
     func test_quitRecast_terminatesApp() {
         var didTerminate = false
         let controller = AppLifecycleController(
@@ -84,12 +63,10 @@ final class AppLifecycleControllerTests: XCTestCase {
 
     private func makeRuntime(
         activateApp: @escaping () -> Void = {},
-        showSettingsWindow: @escaping () -> Void = {},
         terminate: @escaping () -> Void = {}
     ) -> AppLifecycleRuntime {
         AppLifecycleRuntime(
             activateApp: activateApp,
-            showSettingsWindow: showSettingsWindow,
             terminate: terminate
         )
     }
