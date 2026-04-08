@@ -1,6 +1,6 @@
 # Recast
 
-A native macOS app that turns YouTube channels and one-off YouTube episodes into a podcast feed. Add sources, fetch new talks, and subscribe in any podcast app on your phone.
+A native macOS menu bar app that turns YouTube channels and one-off YouTube episodes into a podcast feed. Add sources, fetch new talks, and subscribe in any podcast app on your phone.
 
 ## Quick Start
 
@@ -9,6 +9,7 @@ A native macOS app that turns YouTube channels and one-off YouTube episodes into
 ```
 
 Generates the Xcode project, builds a Release app, and places `Recast.app` in the repo root. Drag it to `/Applications` and run.
+When launched, Recast appears in the menu bar, opens its main window, and keeps running in the menu bar after the window is closed.
 
 For development, open the project in Xcode:
 
@@ -24,6 +25,8 @@ For development, open the project in Xcode:
 2. **Refresh sources** — Select one or more sidebar sources, then press Refresh to discover episodes
 3. **Download what you want** — Download individual episodes, or multi-select for batch download/delete
 4. **Subscribe** — Start the built-in podcast server and scan the QR code from your phone
+
+Close the main window at any time to leave Recast running in the menu bar. Use the menu bar icon to reopen the app, open Settings, or quit.
 
 ## Subscribe on Your Phone
 
@@ -45,6 +48,7 @@ You can also copy the feed URL shown in Settings or the status bar.
 - **Selective download** — Download individual episodes or a multi-selection; stop any download mid-flight
 - **Podcast feed** — Standard RSS 2.0 with iTunes extensions, compatible with all podcast apps
 - **Built-in server** — HTTP server hosts your feed; configurable address and port
+- **Menu bar app** — launches without a Dock icon and stays available from the menu bar when its window is closed
 - **Search & filters** — Filter by All, Downloaded, New, or Unplayed across all sources
 - **Played/Unplayed tracking** — Mark episodes to track what you've listened to
 - **Auto-fetch** — Check for new episodes every 6, 12, or 24 hours
@@ -55,7 +59,7 @@ You can also copy the feed URL shown in Settings or the status bar.
 
 ## Settings
 
-Open **Recast > Settings** (Cmd+,) to configure:
+Open **Settings…** from the Recast menu bar item, or press `Cmd+,` while Recast is active, to configure:
 
 - **Episodes folder** — where downloaded MP3s are stored (default: `~/Music/Recast`). Recast writes channel folders directly inside the selected folder. A hidden `.recast/` subfolder stores your shared subscriptions, episode list, and downloaded artwork; because it lives alongside your episodes, pointing two Macs at the same cloud folder (iCloud Drive, Dropbox, etc.) keeps them in sync automatically. Feed/server files are regenerated locally under `~/Library/Application Support/Recast/server/`, and local settings, logs, and installed tools stay under `~/Library/Application Support/Recast/`.
 - **Address** — host and port for the podcast server (default: auto-detected local IP, port 8888). Set a custom host (e.g. a Tailscale IP) to reach the server from outside your local network.

@@ -143,9 +143,6 @@ struct ContentView: View {
             SetupView()
         } else {
             mainContent
-                .onAppear {
-                    store.onLaunch()
-                }
         }
     }
 
