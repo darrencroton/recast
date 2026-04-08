@@ -97,7 +97,7 @@ struct SettingsView: View {
             }
 
             Section("Automation") {
-                Picker("Check for new episodes", selection: $bindableStore.autoFetchInterval) {
+                Picker("Check for and download new episodes", selection: $bindableStore.autoFetchInterval) {
                     Text("Manually").tag(0)
                     Text("Every 6 hours").tag(6)
                     Text("Every 12 hours").tag(12)

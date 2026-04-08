@@ -554,6 +554,66 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.episodeCount(for: Set(), query: "", filter: .all), 2)
     }
 
+    func test_autoFetchDownloadTargets_onlyIncludesUndownloadedPendingAutoDownloads() {
+        let channel = makeChannel()
+        var newPending = makeEpisode(channelID: channel.id, videoID: "new-pending", daysAgo: 1)
+        newPending.isPendingAutoDownload = true
+        let oldPending = makeEpisode(channelID: channel.id, videoID: "old-pending", daysAgo: 2)
+        var newDownloaded = makeEpisode(channelID: channel.id, videoID: "new-downloaded", fileName: "new-downloaded.mp3")
+        newDownloaded.isPendingAutoDownload = true
+        store.channels = [channel]
+        store.episodes = [oldPending, newDownloaded, newPending]
+
+        let result = store.autoFetchDownloadTargets(for: Set())
+
+        XCTAssertEqual(result.map(\.videoID), ["new-pending"])
+    }
+
+    func test_autoFetchDownloadTargets_retriesPendingAutoDownloadAfterNewFlagCleared() {
+        let channel = makeChannel()
+        var retryable = makeEpisode(channelID: channel.id, videoID: "retryable")
+        retryable.isPendingAutoDownload = true
+        store.channels = [channel]
+        store.episodes = [retryable]
+
+        let result = store.autoFetchDownloadTargets(for: Set())
+
+        XCTAssertEqual(result.map(\.videoID), ["retryable"])
+    }
+
+    func test_autoFetchDownloadTargets_skipsKnownUndownloadedSingleEpisodeSource() {
+        let source = Channel(
+            url: "https://www.youtube.com/watch?v=solo123",
+            name: "Solo Creator",
+            sourceKind: .singleEpisode,
+            relatedCollectionURL: "https://www.youtube.com/@solo/videos"
+        )
+        let episode = makeEpisode(channelID: source.id, videoID: "solo123")
+        store.channels = [source]
+        store.episodes = [episode]
+
+        let result = store.autoFetchDownloadTargets(for: Set())
+
+        XCTAssertTrue(result.isEmpty)
+    }
+
+    func test_autoFetchDownloadTargets_filtersByChannelAndSortsNewestFirst() {
+        let channelA = makeChannel(name: "A", urlHandle: "a")
+        let channelB = makeChannel(name: "B", urlHandle: "b")
+        var newest = makeEpisode(channelID: channelA.id, videoID: "newest", daysAgo: 0)
+        newest.isPendingAutoDownload = true
+        var older = makeEpisode(channelID: channelA.id, videoID: "older", daysAgo: 3)
+        older.isPendingAutoDownload = true
+        var otherChannel = makeEpisode(channelID: channelB.id, videoID: "other-channel", daysAgo: 1)
+        otherChannel.isPendingAutoDownload = true
+        store.channels = [channelA, channelB]
+        store.episodes = [older, otherChannel, newest]
+
+        let result = store.autoFetchDownloadTargets(for: [channelA.id])
+
+        XCTAssertEqual(result.map(\.videoID), ["newest", "older"])
+    }
+
     func test_hasPendingDownloads_tracksQueuedStatuses() {
         store.activeDownloadStatus["queued"] = DownloadStatus(progress: 0, phase: .queued)
 

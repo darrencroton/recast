@@ -19,6 +19,7 @@ final class ModelTests: XCTestCase {
         XCTAssertFalse(ep.isDownloaded)
         XCTAssertFalse(ep.isPlayed)
         XCTAssertFalse(ep.isNew)
+        XCTAssertFalse(ep.isPendingAutoDownload)
     }
 
     func testEpisodeIsDownloaded() {
@@ -117,6 +118,43 @@ final class ModelTests: XCTestCase {
         XCTAssertTrue(ep.isNew)
     }
 
+    func testEpisodeDecodesWithoutPendingAutoDownload_defaultsToFalse() throws {
+        let json = """
+        {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "channelID": "22222222-2222-2222-2222-222222222222",
+            "videoID": "legacyVid",
+            "title": "Legacy Episode",
+            "publishDate": 0,
+            "durationSeconds": 300,
+            "isPlayed": false,
+            "isNew": true
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let ep = try JSONDecoder().decode(Episode.self, from: data)
+        XCTAssertFalse(ep.isPendingAutoDownload)
+    }
+
+    func testEpisodeDecodesWithPendingAutoDownload() throws {
+        let json = """
+        {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "channelID": "22222222-2222-2222-2222-222222222222",
+            "videoID": "retryVid",
+            "title": "Retry Episode",
+            "publishDate": 0,
+            "durationSeconds": 300,
+            "isPlayed": false,
+            "isNew": false,
+            "isPendingAutoDownload": true
+        }
+        """
+        let data = json.data(using: .utf8)!
+        let ep = try JSONDecoder().decode(Episode.self, from: data)
+        XCTAssertTrue(ep.isPendingAutoDownload)
+    }
+
     func testEpisodeRoundTrip() throws {
         var ep = Episode(
             channelID: UUID(), videoID: "rt1", title: "Round Trip",
@@ -125,6 +163,7 @@ final class ModelTests: XCTestCase {
         ep.isPlayed = true
         ep.fileName = "rt1.mp3"
         ep.isNew = true
+        ep.isPendingAutoDownload = true
 
         let data = try JSONEncoder().encode(ep)
         let decoded = try JSONDecoder().decode(Episode.self, from: data)
@@ -132,6 +171,7 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(decoded.title, ep.title)
         XCTAssertEqual(decoded.isPlayed, true)
         XCTAssertEqual(decoded.isNew, true)
+        XCTAssertEqual(decoded.isPendingAutoDownload, true)
         XCTAssertEqual(decoded.fileName, "rt1.mp3")
     }
 

@@ -512,6 +512,7 @@ final class AppStore {
             let relativePath = Paths.relativeEpisodePath(forFileName: fileName, in: channel)
             if let idx = episodes.firstIndex(where: { $0.videoID == videoID }) {
                 episodes[idx].fileName = relativePath
+                episodes[idx].isPendingAutoDownload = false
             }
             statusMessage = "Downloaded: \(currentEpisode.title.prefix(50))"
             AppLogger.info("Downloaded episode \(currentEpisode.videoID) to \(relativePath)", category: "download")
@@ -536,23 +537,12 @@ final class AppStore {
     }
 
     @MainActor
-    func downloadAllNew(for channelIDs: Set<UUID>, operationToken: UInt64? = nil) async {
+    func downloadNewEpisodes(for channelIDs: Set<UUID>, operationToken: UInt64? = nil) async {
         let operationToken = operationToken ?? operationGeneration
         guard isCurrentOperation(operationToken) else { return }
         cancelAllDownloadsRequested = false
-        let targets = sortEpisodesNewestFirst(validEpisodes.filter { ep in
-            !ep.isDownloaded &&
-            activeDownloadStatus[ep.videoID] == nil &&
-            (channelIDs.isEmpty || channelIDs.contains(ep.channelID))
-        })
-        queueDownloads(targets)
-
-        for episode in targets {
-            guard isCurrentOperation(operationToken), !cancelAllDownloadsRequested else { break }
-            await downloadEpisode(episode, operationToken: operationToken)
-        }
-
-        clearQueuedDownloads(targets)
+        let targets = autoFetchDownloadTargets(for: channelIDs)
+        await processDownloadQueue(targets, operationToken: operationToken)
     }
 
     @MainActor
@@ -567,23 +557,16 @@ final class AppStore {
                 activeDownloadStatus[$0.videoID] == nil
             }
         )
-        queueDownloads(targets)
-
-        for episode in targets {
-            guard isCurrentOperation(operationToken), !cancelAllDownloadsRequested else { break }
-            await downloadEpisode(episode, operationToken: operationToken)
-        }
-
-        clearQueuedDownloads(targets)
+        await processDownloadQueue(targets, operationToken: operationToken)
     }
 
-    /// Auto-fetch: discover AND download (background behaviour)
+    /// Auto-fetch: discover new episodes and download the pending scheduled-download set.
     @MainActor
     func autoFetch() async {
         let operationToken = operationGeneration
         let didCompleteFetch = await fetchNewEpisodes(for: Set())
         guard didCompleteFetch, isCurrentOperation(operationToken) else { return }
-        await downloadAllNew(for: Set(), operationToken: operationToken)
+        await downloadNewEpisodes(for: Set(), operationToken: operationToken)
     }
 
     // MARK: - Episode management
@@ -945,6 +928,27 @@ final class AppStore {
         }
     }
 
+    func autoFetchDownloadTargets(for channelIDs: Set<UUID>) -> [Episode] {
+        sortEpisodesNewestFirst(validEpisodes.filter { episode in
+            episode.isPendingAutoDownload &&
+            !episode.isDownloaded &&
+            activeDownloadStatus[episode.videoID] == nil &&
+            (channelIDs.isEmpty || channelIDs.contains(episode.channelID))
+        })
+    }
+
+    @MainActor
+    private func processDownloadQueue(_ targets: [Episode], operationToken: UInt64) async {
+        queueDownloads(targets)
+
+        for episode in targets {
+            guard isCurrentOperation(operationToken), !cancelAllDownloadsRequested else { break }
+            await downloadEpisode(episode, operationToken: operationToken)
+        }
+
+        clearQueuedDownloads(targets)
+    }
+
     private func clearQueuedDownloads(_ episodes: [Episode]) {
         for episode in episodes where activeDownloadStatus[episode.videoID]?.phase == .queued {
             activeDownloadStatus.removeValue(forKey: episode.videoID)
@@ -1119,6 +1123,7 @@ final class AppStore {
             durationSeconds: video.durationSeconds
         )
         episode.isNew = markAsNew
+        episode.isPendingAutoDownload = markAsNew
         episodes.append(episode)
     }
 

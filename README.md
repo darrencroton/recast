@@ -51,7 +51,7 @@ You can also copy the feed URL shown in Settings or the status bar.
 - **Menu bar app** — launches without a Dock icon and stays available from the menu bar when its window is closed
 - **Search & filters** — Filter by All, Downloaded, New, or Unplayed across all sources
 - **Played/Unplayed tracking** — Mark episodes to track what you've listened to
-- **Auto-fetch** — Check for new episodes every 6, 12, or 24 hours
+- **Auto-fetch** — Check for and download newly discovered episodes every 6, 12, or 24 hours. If a scheduled download fails, Recast retries it on later scheduled runs until one of those downloads succeeds.
 - **Auto-start server** — Start the podcast server when the app launches
 - **QR code** — One-tap setup for your phone
 - **Multi-Mac sync** — Point two Macs at the same cloud episodes folder, and subscriptions, episode state, download history, and downloaded artwork stay in sync automatically
@@ -64,7 +64,7 @@ Open **Settings…** from the Recast menu bar item, or press `Cmd+,` while Recas
 - **Episodes folder** — where downloaded MP3s are stored (default: `~/Music/Recast`). Recast writes channel folders directly inside the selected folder. A hidden `.recast/` subfolder stores your shared subscriptions, episode list, and downloaded artwork; because it lives alongside your episodes, pointing two Macs at the same cloud folder (iCloud Drive, Dropbox, etc.) keeps them in sync automatically. Feed/server files are regenerated locally under `~/Library/Application Support/Recast/server/`, and local settings, logs, and installed tools stay under `~/Library/Application Support/Recast/`.
 - **Address** — host and port for the podcast server (default: auto-detected local IP, port 8888). Set a custom host (e.g. a Tailscale IP) to reach the server from outside your local network.
 - **Auto-start server** — launch the podcast server when the app opens
-- **Auto-fetch interval** — check for new episodes on a schedule
+- **Auto-fetch interval** — check for and download newly discovered episodes on a schedule, retrying any scheduled-download failures on later runs
 - **Dependency status** — confirms `yt-dlp` and `ffmpeg` are installed
 - **Reset App to Defaults** — clears saved sources, episode state, Recast-managed downloads, generated feeds, and installed tools (diagnostic logs are kept)
 

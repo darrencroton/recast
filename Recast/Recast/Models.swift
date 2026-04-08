@@ -105,6 +105,7 @@ struct Episode: Identifiable, Codable, Hashable {
     var fileName: String?
     var isPlayed: Bool
     var isNew: Bool
+    var isPendingAutoDownload: Bool
 
     var isDownloaded: Bool { fileName != nil }
 
@@ -117,6 +118,48 @@ struct Episode: Identifiable, Codable, Hashable {
         self.durationSeconds = durationSeconds
         self.isPlayed = false
         self.isNew = false
+        self.isPendingAutoDownload = false
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id
+        case channelID
+        case videoID
+        case title
+        case publishDate
+        case durationSeconds
+        case fileName
+        case isPlayed
+        case isNew
+        case isPendingAutoDownload
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        channelID = try container.decode(UUID.self, forKey: .channelID)
+        videoID = try container.decode(String.self, forKey: .videoID)
+        title = try container.decode(String.self, forKey: .title)
+        publishDate = try container.decode(Date.self, forKey: .publishDate)
+        durationSeconds = try container.decode(Int.self, forKey: .durationSeconds)
+        fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
+        isPlayed = try container.decodeIfPresent(Bool.self, forKey: .isPlayed) ?? false
+        isNew = try container.decodeIfPresent(Bool.self, forKey: .isNew) ?? false
+        isPendingAutoDownload = try container.decodeIfPresent(Bool.self, forKey: .isPendingAutoDownload) ?? false
+    }
+
+    func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(id, forKey: .id)
+        try container.encode(channelID, forKey: .channelID)
+        try container.encode(videoID, forKey: .videoID)
+        try container.encode(title, forKey: .title)
+        try container.encode(publishDate, forKey: .publishDate)
+        try container.encode(durationSeconds, forKey: .durationSeconds)
+        try container.encodeIfPresent(fileName, forKey: .fileName)
+        try container.encode(isPlayed, forKey: .isPlayed)
+        try container.encode(isNew, forKey: .isNew)
+        try container.encode(isPendingAutoDownload, forKey: .isPendingAutoDownload)
     }
 
     var formattedDuration: String {

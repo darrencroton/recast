@@ -71,6 +71,7 @@ Requirements: macOS 14.0+, Xcode 15+, XcodeGen (`brew install xcodegen`).
 - Keep one unified saved-source model. Prefer extending existing source/channel flows over creating separate ad-hoc paths for direct episode URLs.
 - Keep episode ordering newest-first unless a feature explicitly calls for a different presentation
 - The `New` filter means "found in the most recent fetch for the current scope", not "all undownloaded episodes"
+- Auto-fetch should download only newly discovered episodes, never an older undownloaded backlog, and it should keep retrying scheduled-download failures until a download succeeds
 - Adding a direct episode URL should stay consistent with Recast's existing explicit-download model: add/save first, then download via normal download controls
 - Source and episode multi-selection are shared across `ContentView` and `EpisodeListView`; preserve standard macOS click, Shift-click, and Command-click behaviour
 - Toolbar actions split into global (server, QR code, add source) and selection-scoped (refresh, download, delete); right-click menus follow the same selection rules
@@ -83,7 +84,7 @@ cd Recast
 xcodebuild test -scheme Recast -destination 'platform=macOS'
 ```
 
-The suite covers reset safety, episode models, RSS feed generation, XML escaping, store logic, search filtering, source-organised output paths, episode management, downloader parsing/cleanup helpers, and persistence. `FeedGenerator.xmlEscape/rfc2822/formatDuration`, `Store.normalizeYouTubeURL`, and several downloader helpers are intentionally not `private` so `@testable import` can reach them.
+The suite covers reset safety, episode models, RSS feed generation, XML escaping, store logic, search filtering, auto-fetch candidate selection and retry state, source-organised output paths, episode management, downloader parsing/cleanup helpers, and persistence. `FeedGenerator.xmlEscape/rfc2822/formatDuration`, `Store.normalizeYouTubeURL`, `Store.autoFetchDownloadTargets`, and several downloader helpers are intentionally not `private` so `@testable import` can reach them.
 
 Live yt-dlp/ffmpeg subprocess execution and `PodcastServer` on real network ports are not unit tested.
 
