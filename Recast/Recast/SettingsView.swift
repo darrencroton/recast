@@ -107,6 +107,25 @@ struct SettingsView: View {
                     store.save()
                     store.restartAutoFetchTimer()
                 }
+
+                Text("Adding a source fetches its current episodes immediately and shows them in New, but never auto-downloads that first backlog. Later scheduled checks auto-download up to 5 newly discovered episodes per source; manual refresh only updates New.")
+                    .font(.footnote)
+                    .foregroundStyle(.secondary)
+
+                LabeledContent("Last auto-check") {
+                    Text(autoFetchStatusText(for: store.lastAutoFetchAt, disabledText: "Not yet"))
+                        .foregroundStyle(.secondary)
+                }
+
+                LabeledContent("Next auto-check") {
+                    Text(autoFetchStatusText(for: store.nextAutoFetchAt, disabledText: "Disabled"))
+                        .foregroundStyle(.secondary)
+                }
+
+                LabeledContent("Pending scheduled downloads") {
+                    Text("\(store.pendingScheduledDownloadCount)")
+                        .foregroundStyle(.secondary)
+                }
             }
 
             Section("About") {
@@ -243,6 +262,11 @@ struct SettingsView: View {
 
     private var serverPortDisplayValue: String {
         store.serverPort == store.defaultServerPort ? "" : String(store.serverPort)
+    }
+
+    private func autoFetchStatusText(for date: Date?, disabledText: String) -> String {
+        guard let date else { return disabledText }
+        return date.formatted(date: .abbreviated, time: .shortened)
     }
 }
 

@@ -61,6 +61,16 @@ final class StoreTests: XCTestCase {
         return ep
     }
 
+    private func makeVideoInfo(videoID: String, daysAgo: Int = 0) -> Downloader.VideoInfo {
+        let publishDate = Calendar.current.date(byAdding: .day, value: -daysAgo, to: Date())!
+        return Downloader.VideoInfo(
+            videoID: videoID,
+            title: videoID,
+            publishDate: publishDate,
+            durationSeconds: 120
+        )
+    }
+
     private func createDownloadedEpisodeFile(named relativePath: String) throws -> URL {
         let fileURL = Paths.episodeFileURL(forRelativePath: relativePath, in: store.episodesDirectory)
         try FileManager.default.createDirectory(
@@ -612,6 +622,189 @@ final class StoreTests: XCTestCase {
         let result = store.autoFetchDownloadTargets(for: [channelA.id])
 
         XCTAssertEqual(result.map(\.videoID), ["newest", "older"])
+    }
+
+    func test_autoFetchDownloadTargets_limitsScheduledDownloadsPerChannel() {
+        let channelA = makeChannel(name: "A", urlHandle: "a")
+        let channelB = makeChannel(name: "B", urlHandle: "b")
+
+        let channelAEpisodes = (0..<7).map { index -> Episode in
+            var episode = makeEpisode(channelID: channelA.id, videoID: "a\(index)", daysAgo: index)
+            episode.isPendingAutoDownload = true
+            return episode
+        }
+        let channelBEpisodes = (0..<2).map { index -> Episode in
+            var episode = makeEpisode(channelID: channelB.id, videoID: "b\(index)", daysAgo: index)
+            episode.isPendingAutoDownload = true
+            return episode
+        }
+
+        store.channels = [channelA, channelB]
+        store.episodes = channelAEpisodes + channelBEpisodes
+
+        let result = store.autoFetchDownloadTargets(for: Set(), maxPerChannel: 5)
+
+        XCTAssertEqual(result.filter { $0.channelID == channelA.id }.count, 5)
+        XCTAssertEqual(result.filter { $0.channelID == channelB.id }.count, 2)
+        XCTAssertEqual(
+            result.filter { $0.channelID == channelA.id }.map(\.videoID),
+            ["a0", "a1", "a2", "a3", "a4"]
+        )
+        XCTAssertEqual(
+            result.filter { $0.channelID == channelB.id }.map(\.videoID),
+            ["b0", "b1"]
+        )
+    }
+
+    func test_autoFetchDownloadTargets_rotatesOlderPendingRetriesBackIntoCappedSelection() {
+        let channel = makeChannel()
+        let now = Date()
+        let recentAttempt = now.addingTimeInterval(-60)
+        let olderAttempt = now.addingTimeInterval(-600)
+
+        let episodes = (0..<7).map { index -> Episode in
+            var episode = makeEpisode(channelID: channel.id, videoID: "ep\(index)", daysAgo: index)
+            episode.isPendingAutoDownload = true
+            if index < 5 {
+                episode.lastAutoDownloadAttemptAt = recentAttempt
+            } else if index == 5 {
+                episode.lastAutoDownloadAttemptAt = olderAttempt
+            }
+            return episode
+        }
+
+        store.channels = [channel]
+        store.episodes = episodes
+
+        let result = store.autoFetchDownloadTargets(for: Set(), maxPerChannel: 5)
+
+        XCTAssertTrue(result.map(\.videoID).contains("ep6"))
+        XCTAssertTrue(result.map(\.videoID).contains("ep5"))
+        XCTAssertEqual(result.count, 5)
+    }
+
+    func test_recordAutoDownloadAttempt_marksOnlySelectedScheduledTargets() {
+        let channel = makeChannel()
+        let episodes = (0..<7).map { index -> Episode in
+            var episode = makeEpisode(channelID: channel.id, videoID: "ep\(index)", daysAgo: index)
+            episode.isPendingAutoDownload = true
+            return episode
+        }
+        store.channels = [channel]
+        store.episodes = episodes
+
+        let targets = store.autoFetchDownloadTargets(for: Set(), maxPerChannel: 5)
+        store.recordAutoDownloadAttempt(for: targets)
+
+        XCTAssertEqual(store.episodes.filter { $0.lastAutoDownloadAttemptAt != nil }.count, 5)
+        XCTAssertTrue(store.episodes.contains { $0.videoID == "ep5" && $0.lastAutoDownloadAttemptAt == nil })
+        XCTAssertTrue(store.episodes.contains { $0.videoID == "ep6" && $0.lastAutoDownloadAttemptAt == nil })
+    }
+
+    func test_autoFetch_doesNotRecordLastAutoFetchAtWhenAnotherRefreshIsRunning() async {
+        store.isFetching = true
+
+        await store.autoFetch()
+
+        XCTAssertNil(store.lastAutoFetchAt)
+    }
+
+    func test_addSource_collectionImmediatelyFetchesInitialEpisodesAsNewWithoutPendingAutoDownload() async throws {
+        let resolvedName = "Science Updates"
+        let initialVideos = [
+            makeVideoInfo(videoID: "fresh0", daysAgo: 0),
+            makeVideoInfo(videoID: "fresh1", daysAgo: 1),
+        ]
+
+        store = AppStore(
+            stateFileURL: tempStateFile,
+            appSupportURL: tempAppSupportDir,
+            defaultEpisodesDirectory: defaultEpisodesDir,
+            shouldLoadPersistentState: false,
+            autoCheckDependencies: false,
+            resolveChannelNameOverride: { _ in resolvedName },
+            listVideosOverride: { _, _ in initialVideos }
+        )
+        store.episodesDirectory = tempDir
+
+        try await store.addSource(url: "https://www.youtube.com/@science/videos")
+
+        XCTAssertEqual(store.channels.count, 1)
+        XCTAssertEqual(store.channels[0].name, resolvedName)
+        XCTAssertTrue(store.channels[0].hasCompletedInitialImport)
+        XCTAssertEqual(Set(store.episodes.map(\.videoID)), Set(["fresh0", "fresh1"]))
+        XCTAssertTrue(store.episodes.allSatisfy(\.isNew))
+        XCTAssertTrue(store.episodes.allSatisfy { !$0.isPendingAutoDownload })
+    }
+
+    func test_fetchNewEpisodes_manualRefreshReplacesNewWithoutQueueingAutoDownload() async {
+        let channel = Channel(
+            url: "https://www.youtube.com/@science/videos",
+            name: "Science",
+            hasCompletedInitialImport: true
+        )
+        var existingEpisode = makeEpisode(channelID: channel.id, videoID: "existing", daysAgo: 2)
+        existingEpisode.isNew = true
+
+        store = AppStore(
+            stateFileURL: tempStateFile,
+            appSupportURL: tempAppSupportDir,
+            defaultEpisodesDirectory: defaultEpisodesDir,
+            shouldLoadPersistentState: false,
+            autoCheckDependencies: false,
+            listVideosOverride: { _, _ in
+                [
+                    self.makeVideoInfo(videoID: "new-manual", daysAgo: 0),
+                    self.makeVideoInfo(videoID: "existing", daysAgo: 2),
+                ]
+            }
+        )
+        store.episodesDirectory = tempDir
+        store.channels = [channel]
+        store.episodes = [existingEpisode]
+
+        let didComplete = await store.fetchNewEpisodes(for: [channel.id], context: .manual)
+
+        XCTAssertTrue(didComplete)
+        XCTAssertFalse(try! XCTUnwrap(store.episodes.first(where: { $0.videoID == "existing" })).isNew)
+        let manualEpisode = try! XCTUnwrap(store.episodes.first(where: { $0.videoID == "new-manual" }))
+        XCTAssertTrue(manualEpisode.isNew)
+        XCTAssertFalse(manualEpisode.isPendingAutoDownload)
+    }
+
+    func test_fetchNewEpisodes_scheduledRefreshReplacesNewAndQueuesAutoDownloadForImportedCollection() async {
+        let channel = Channel(
+            url: "https://www.youtube.com/@science/videos",
+            name: "Science",
+            hasCompletedInitialImport: true
+        )
+        var existingEpisode = makeEpisode(channelID: channel.id, videoID: "existing", daysAgo: 2)
+        existingEpisode.isNew = true
+
+        store = AppStore(
+            stateFileURL: tempStateFile,
+            appSupportURL: tempAppSupportDir,
+            defaultEpisodesDirectory: defaultEpisodesDir,
+            shouldLoadPersistentState: false,
+            autoCheckDependencies: false,
+            listVideosOverride: { _, _ in
+                [
+                    self.makeVideoInfo(videoID: "new-scheduled", daysAgo: 0),
+                    self.makeVideoInfo(videoID: "existing", daysAgo: 2),
+                ]
+            }
+        )
+        store.episodesDirectory = tempDir
+        store.channels = [channel]
+        store.episodes = [existingEpisode]
+
+        let didComplete = await store.fetchNewEpisodes(for: [channel.id], context: .scheduled)
+
+        XCTAssertTrue(didComplete)
+        XCTAssertFalse(try! XCTUnwrap(store.episodes.first(where: { $0.videoID == "existing" })).isNew)
+        let scheduledEpisode = try! XCTUnwrap(store.episodes.first(where: { $0.videoID == "new-scheduled" }))
+        XCTAssertTrue(scheduledEpisode.isNew)
+        XCTAssertTrue(scheduledEpisode.isPendingAutoDownload)
     }
 
     func test_hasPendingDownloads_tracksQueuedStatuses() {

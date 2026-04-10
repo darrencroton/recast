@@ -20,6 +20,7 @@ final class ModelTests: XCTestCase {
         XCTAssertFalse(ep.isPlayed)
         XCTAssertFalse(ep.isNew)
         XCTAssertFalse(ep.isPendingAutoDownload)
+        XCTAssertNil(ep.lastAutoDownloadAttemptAt)
     }
 
     func testEpisodeIsDownloaded() {
@@ -134,6 +135,7 @@ final class ModelTests: XCTestCase {
         let data = json.data(using: .utf8)!
         let ep = try JSONDecoder().decode(Episode.self, from: data)
         XCTAssertFalse(ep.isPendingAutoDownload)
+        XCTAssertNil(ep.lastAutoDownloadAttemptAt)
     }
 
     func testEpisodeDecodesWithPendingAutoDownload() throws {
@@ -155,6 +157,24 @@ final class ModelTests: XCTestCase {
         XCTAssertTrue(ep.isPendingAutoDownload)
     }
 
+    func testEpisodeDecodesWithoutLastAutoDownloadAttempt_defaultsToNil() throws {
+        let json = """
+        {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "channelID": "22222222-2222-2222-2222-222222222222",
+            "videoID": "pendingVid",
+            "title": "Pending Episode",
+            "publishDate": 0,
+            "durationSeconds": 300,
+            "isPendingAutoDownload": true
+        }
+        """
+
+        let ep = try JSONDecoder().decode(Episode.self, from: Data(json.utf8))
+
+        XCTAssertNil(ep.lastAutoDownloadAttemptAt)
+    }
+
     func testEpisodeRoundTrip() throws {
         var ep = Episode(
             channelID: UUID(), videoID: "rt1", title: "Round Trip",
@@ -164,6 +184,7 @@ final class ModelTests: XCTestCase {
         ep.fileName = "rt1.mp3"
         ep.isNew = true
         ep.isPendingAutoDownload = true
+        ep.lastAutoDownloadAttemptAt = Date(timeIntervalSince1970: 2000)
 
         let data = try JSONEncoder().encode(ep)
         let decoded = try JSONDecoder().decode(Episode.self, from: data)
@@ -173,6 +194,7 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(decoded.isNew, true)
         XCTAssertEqual(decoded.isPendingAutoDownload, true)
         XCTAssertEqual(decoded.fileName, "rt1.mp3")
+        XCTAssertEqual(decoded.lastAutoDownloadAttemptAt, ep.lastAutoDownloadAttemptAt)
     }
 
     // MARK: - Channel
@@ -182,6 +204,7 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(ch.name, "Test")
         XCTAssertEqual(ch.url, "https://www.youtube.com/@test/videos")
         XCTAssertNotNil(ch.id)
+        XCTAssertFalse(ch.hasCompletedInitialImport)
     }
 
     func testChannelCodableRoundTrip() throws {
@@ -192,6 +215,7 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(decoded.url, ch.url)
         XCTAssertEqual(decoded.name, ch.name)
         XCTAssertEqual(decoded.sourceKind, .collection)
+        XCTAssertFalse(decoded.hasCompletedInitialImport)
     }
 
     func testChannelCodableRoundTrip_preservesSingleEpisodeMetadata() throws {
@@ -207,6 +231,39 @@ final class ModelTests: XCTestCase {
 
         XCTAssertEqual(decoded.sourceKind, .singleEpisode)
         XCTAssertEqual(decoded.relatedCollectionURL, "https://www.youtube.com/@creator/videos")
+        XCTAssertTrue(decoded.hasCompletedInitialImport)
+    }
+
+    func testCollectionChannelDecodesWithoutInitialImportFlag_defaultsToFalse() throws {
+        let json = """
+        {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "url": "https://www.youtube.com/@test/videos",
+            "name": "Test",
+            "dateAdded": 0,
+            "sourceKind": "collection"
+        }
+        """
+
+        let decoded = try JSONDecoder().decode(Channel.self, from: Data(json.utf8))
+
+        XCTAssertFalse(decoded.hasCompletedInitialImport)
+    }
+
+    func testSingleEpisodeChannelDecodesWithoutInitialImportFlag_defaultsToTrue() throws {
+        let json = """
+        {
+            "id": "11111111-1111-1111-1111-111111111111",
+            "url": "https://www.youtube.com/watch?v=abc123",
+            "name": "Test",
+            "dateAdded": 0,
+            "sourceKind": "singleEpisode"
+        }
+        """
+
+        let decoded = try JSONDecoder().decode(Channel.self, from: Data(json.utf8))
+
+        XCTAssertTrue(decoded.hasCompletedInitialImport)
     }
 
     func testPublishedDate_prefersUploadDate() {

@@ -6,12 +6,22 @@ final class AppStore {
     private static let defaultServerHost = ""
     private static let defaultAutoFetchInterval = 0
     private static let defaultAutoStartServer = false
+    private static let scheduledAutoDownloadLimitPerChannel = 5
     private let openURLInDefaultApp: (URL) -> Bool
     private let revealURLsInFinder: ([URL]) -> Void
+    private let resolveChannelNameOverride: ((String) async throws -> String)?
+    private let resolveVideoSourceOverride: ((String) async throws -> Downloader.ResolvedVideoSource)?
+    private let listVideosOverride: ((String, Int) async throws -> [Downloader.VideoInfo])?
 
     private enum ResolvedYouTubeInput {
         case collection(url: String)
         case singleVideo(url: String, videoID: String)
+    }
+
+    enum RefreshContext {
+        case initialImport
+        case manual
+        case scheduled
     }
 
     private enum AddSourceError: LocalizedError {
@@ -45,6 +55,8 @@ final class AppStore {
     // Settings
     var autoFetchInterval: Int = 0   // hours; 0 = disabled
     var autoStartServer: Bool = false
+    var lastAutoFetchAt: Date?
+    var nextAutoFetchAt: Date?
 
     // Dependencies
     var ytDlpReady = false
@@ -72,6 +84,9 @@ final class AppStore {
         defaultEpisodesDirectory: URL = Paths.defaultEpisodesDir,
         shouldLoadPersistentState: Bool = true,
         autoCheckDependencies: Bool = true,
+        resolveChannelNameOverride: ((String) async throws -> String)? = nil,
+        resolveVideoSourceOverride: ((String) async throws -> Downloader.ResolvedVideoSource)? = nil,
+        listVideosOverride: ((String, Int) async throws -> [Downloader.VideoInfo])? = nil,
         openURLInDefaultApp: @escaping (URL) -> Bool = { NSWorkspace.shared.open($0) },
         revealURLsInFinder: @escaping ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) }
     ) {
@@ -81,6 +96,9 @@ final class AppStore {
         self.stateFileURL = stateFileURL
         self.openURLInDefaultApp = openURLInDefaultApp
         self.revealURLsInFinder = revealURLsInFinder
+        self.resolveChannelNameOverride = resolveChannelNameOverride
+        self.resolveVideoSourceOverride = resolveVideoSourceOverride
+        self.listVideosOverride = listVideosOverride
         AppLogger.info("Initialising store; local state at \(stateFileURL.lastPathComponent)", category: "store")
         if shouldLoadPersistentState {
             load()
@@ -300,7 +318,7 @@ final class AppStore {
 
             statusMessage = "Resolving source…"
             AppLogger.info("Adding collection source from \(collectionURL)", category: "channels")
-            let name = try await downloader.resolveChannelName(url: collectionURL)
+            let name = try await resolveChannelName(for: collectionURL)
             guard isCurrentOperation(operationToken) else { return }
 
             let channel = Channel(url: collectionURL, name: name)
@@ -308,11 +326,12 @@ final class AppStore {
             save()
             statusMessage = "Added \(name)"
             AppLogger.info("Added collection source \(name) with id \(channel.id)", category: "channels")
+            _ = await fetchNewEpisodes(for: [channel.id], context: .initialImport)
 
         case .singleVideo(let videoURL, _):
             statusMessage = "Resolving episode…"
             AppLogger.info("Adding single-episode source from \(videoURL)", category: "channels")
-            let resolvedVideo = try await downloader.resolveVideoSource(url: videoURL)
+            let resolvedVideo = try await resolveVideoSource(for: videoURL)
             guard isCurrentOperation(operationToken) else { return }
             let normalizedCollectionURL = resolvedVideo.collectionURL.map(normalizeYouTubeURL)
 
@@ -326,7 +345,12 @@ final class AppStore {
                let existingCollection = channels.first(where: {
                    $0.sourceKind == .collection && $0.url == collectionURL
                }) {
-                appendEpisodeIfNeeded(resolvedVideo.video, to: existingCollection.id, markAsNew: false)
+                appendEpisodeIfNeeded(
+                    resolvedVideo.video,
+                    to: existingCollection.id,
+                    markAsNew: false,
+                    markPendingAutoDownload: false
+                )
                 save()
                 statusMessage = "Added episode to \(existingCollection.name)"
                 AppLogger.info(
@@ -346,10 +370,16 @@ final class AppStore {
                 url: videoURL,
                 name: sourceName,
                 sourceKind: .singleEpisode,
-                relatedCollectionURL: normalizedCollectionURL
+                relatedCollectionURL: normalizedCollectionURL,
+                hasCompletedInitialImport: true
             )
             channels.append(channel)
-            appendEpisodeIfNeeded(resolvedVideo.video, to: channel.id, markAsNew: false)
+            appendEpisodeIfNeeded(
+                resolvedVideo.video,
+                to: channel.id,
+                markAsNew: false,
+                markPendingAutoDownload: false
+            )
             save()
             statusMessage = "Added episode from \(sourceName)"
             AppLogger.info(
@@ -379,7 +409,7 @@ final class AppStore {
 
     @MainActor
     @discardableResult
-    func fetchNewEpisodes(for channelIDs: Set<UUID>) async -> Bool {
+    func fetchNewEpisodes(for channelIDs: Set<UUID>, context: RefreshContext = .manual) async -> Bool {
         guard !isFetching else { return false }
         let operationToken = operationGeneration
         isFetching = true
@@ -401,8 +431,6 @@ final class AppStore {
         var wasCancelled = false
         AppLogger.info("Starting fetch for \(targets.count) source(s)", category: "fetch")
 
-        clearNewFlags(for: targetChannelIDs)
-
         for channel in targets {
             if isStoppingFetch {
                 wasCancelled = true
@@ -414,16 +442,27 @@ final class AppStore {
             do {
                 let videos = try await videosForFetch(for: channel)
                 guard isCurrentOperation(operationToken) else { return false }
+                clearNewFlags(for: [channel.id])
                 AppLogger.info(
                     "Fetched \(videos.count) candidate video(s) for \(channel.name)",
                     category: "fetch"
                 )
+                let shouldQueueAutoDownload = shouldQueueAutoDownloadForDiscoveredEpisodes(
+                    in: channel,
+                    context: context
+                )
 
                 for video in videos {
-                    if handleFetchedVideo(video, for: channel) {
+                    if handleFetchedVideo(
+                        video,
+                        for: channel,
+                        markPendingAutoDownload: shouldQueueAutoDownload
+                    ) {
                         totalNew += 1
                     }
                 }
+
+                markInitialImportCompletedIfNeeded(for: channel)
             } catch DownloaderError.cancelled {
                 guard isCurrentOperation(operationToken) else { return false }
                 wasCancelled = true
@@ -513,6 +552,7 @@ final class AppStore {
             if let idx = episodes.firstIndex(where: { $0.videoID == videoID }) {
                 episodes[idx].fileName = relativePath
                 episodes[idx].isPendingAutoDownload = false
+                episodes[idx].lastAutoDownloadAttemptAt = nil
             }
             statusMessage = "Downloaded: \(currentEpisode.title.prefix(50))"
             AppLogger.info("Downloaded episode \(currentEpisode.videoID) to \(relativePath)", category: "download")
@@ -537,11 +577,16 @@ final class AppStore {
     }
 
     @MainActor
-    func downloadNewEpisodes(for channelIDs: Set<UUID>, operationToken: UInt64? = nil) async {
+    func downloadNewEpisodes(
+        for channelIDs: Set<UUID>,
+        operationToken: UInt64? = nil,
+        maxPerChannel: Int? = nil
+    ) async {
         let operationToken = operationToken ?? operationGeneration
         guard isCurrentOperation(operationToken) else { return }
         cancelAllDownloadsRequested = false
-        let targets = autoFetchDownloadTargets(for: channelIDs)
+        let targets = autoFetchDownloadTargets(for: channelIDs, maxPerChannel: maxPerChannel)
+        recordAutoDownloadAttempt(for: targets)
         await processDownloadQueue(targets, operationToken: operationToken)
     }
 
@@ -563,10 +608,18 @@ final class AppStore {
     /// Auto-fetch: discover new episodes and download the pending scheduled-download set.
     @MainActor
     func autoFetch() async {
+        guard !isFetching else { return }
         let operationToken = operationGeneration
-        let didCompleteFetch = await fetchNewEpisodes(for: Set())
+        let startedAt = Date()
+        let didCompleteFetch = await fetchNewEpisodes(for: Set(), context: .scheduled)
+        guard isCurrentOperation(operationToken) else { return }
         guard didCompleteFetch, isCurrentOperation(operationToken) else { return }
-        await downloadNewEpisodes(for: Set(), operationToken: operationToken)
+        lastAutoFetchAt = startedAt
+        await downloadNewEpisodes(
+            for: Set(),
+            operationToken: operationToken,
+            maxPerChannel: Self.scheduledAutoDownloadLimitPerChannel
+        )
     }
 
     // MARK: - Episode management
@@ -787,10 +840,13 @@ final class AppStore {
     func restartAutoFetchTimer() {
         autoFetchTimer?.invalidate()
         autoFetchTimer = nil
+        nextAutoFetchAt = nil
         guard autoFetchInterval > 0 else { return }
         let interval = TimeInterval(autoFetchInterval * 3600)
+        nextAutoFetchAt = Date().addingTimeInterval(interval)
         autoFetchTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             guard let self else { return }
+            self.nextAutoFetchAt = Date().addingTimeInterval(interval)
             Task { await self.autoFetch() }
         }
     }
@@ -928,13 +984,29 @@ final class AppStore {
         }
     }
 
-    func autoFetchDownloadTargets(for channelIDs: Set<UUID>) -> [Episode] {
-        sortEpisodesNewestFirst(validEpisodes.filter { episode in
+    func autoFetchDownloadTargets(for channelIDs: Set<UUID>, maxPerChannel: Int? = nil) -> [Episode] {
+        let candidates = validEpisodes.filter { episode in
             episode.isPendingAutoDownload &&
             !episode.isDownloaded &&
             activeDownloadStatus[episode.videoID] == nil &&
             (channelIDs.isEmpty || channelIDs.contains(episode.channelID))
-        })
+        }.sorted(by: autoDownloadPriority(_:_:))
+        guard let maxPerChannel, maxPerChannel > 0 else { return candidates }
+
+        var countsByChannelID: [UUID: Int] = [:]
+        var limited: [Episode] = []
+
+        for episode in candidates {
+            guard countsByChannelID[episode.channelID, default: 0] < maxPerChannel else { continue }
+            limited.append(episode)
+            countsByChannelID[episode.channelID, default: 0] += 1
+        }
+
+        return limited
+    }
+
+    var pendingScheduledDownloadCount: Int {
+        validEpisodes.filter { $0.isPendingAutoDownload && !$0.isDownloaded }.count
     }
 
     @MainActor
@@ -1090,13 +1162,38 @@ final class AppStore {
     private func videosForFetch(for channel: Channel) async throws -> [Downloader.VideoInfo] {
         switch channel.sourceKind {
         case .collection:
-            return try await downloader.listVideos(channelURL: channel.url)
+            return try await listVideos(for: channel.url)
         case .singleEpisode:
-            return [try await downloader.resolveVideoSource(url: channel.url).video]
+            return [try await resolveVideoSource(for: channel.url).video]
         }
     }
 
-    private func handleFetchedVideo(_ video: Downloader.VideoInfo, for channel: Channel) -> Bool {
+    private func resolveChannelName(for url: String) async throws -> String {
+        if let resolveChannelNameOverride {
+            return try await resolveChannelNameOverride(url)
+        }
+        return try await downloader.resolveChannelName(url: url)
+    }
+
+    private func resolveVideoSource(for url: String) async throws -> Downloader.ResolvedVideoSource {
+        if let resolveVideoSourceOverride {
+            return try await resolveVideoSourceOverride(url)
+        }
+        return try await downloader.resolveVideoSource(url: url)
+    }
+
+    private func listVideos(for channelURL: String, max: Int = 50) async throws -> [Downloader.VideoInfo] {
+        if let listVideosOverride {
+            return try await listVideosOverride(channelURL, max)
+        }
+        return try await downloader.listVideos(channelURL: channelURL, max: max)
+    }
+
+    private func handleFetchedVideo(
+        _ video: Downloader.VideoInfo,
+        for channel: Channel,
+        markPendingAutoDownload: Bool
+    ) -> Bool {
         if let existingIndex = episodes.firstIndex(where: { $0.videoID == video.videoID }) {
             if episodes[existingIndex].channelID == channel.id {
                 return false
@@ -1109,11 +1206,21 @@ final class AppStore {
             return false
         }
 
-        appendEpisodeIfNeeded(video, to: channel.id, markAsNew: true)
+        appendEpisodeIfNeeded(
+            video,
+            to: channel.id,
+            markAsNew: true,
+            markPendingAutoDownload: markPendingAutoDownload
+        )
         return true
     }
 
-    private func appendEpisodeIfNeeded(_ video: Downloader.VideoInfo, to channelID: UUID, markAsNew: Bool) {
+    private func appendEpisodeIfNeeded(
+        _ video: Downloader.VideoInfo,
+        to channelID: UUID,
+        markAsNew: Bool,
+        markPendingAutoDownload: Bool
+    ) {
         guard !episodes.contains(where: { $0.videoID == video.videoID }) else { return }
         var episode = Episode(
             channelID: channelID,
@@ -1123,8 +1230,49 @@ final class AppStore {
             durationSeconds: video.durationSeconds
         )
         episode.isNew = markAsNew
-        episode.isPendingAutoDownload = markAsNew
+        episode.isPendingAutoDownload = markPendingAutoDownload
         episodes.append(episode)
+    }
+
+    func recordAutoDownloadAttempt(for targets: [Episode]) {
+        guard !targets.isEmpty else { return }
+        let attemptDate = Date()
+        for target in targets {
+            guard let index = episodes.firstIndex(where: { $0.id == target.id }) else { continue }
+            episodes[index].lastAutoDownloadAttemptAt = attemptDate
+        }
+        save()
+    }
+
+    private func autoDownloadPriority(_ lhs: Episode, _ rhs: Episode) -> Bool {
+        switch (lhs.lastAutoDownloadAttemptAt, rhs.lastAutoDownloadAttemptAt) {
+        case let (leftDate?, rightDate?) where leftDate != rightDate:
+            return leftDate < rightDate
+        case (nil, _?):
+            return true
+        case (_?, nil):
+            return false
+        default:
+            if lhs.publishDate != rhs.publishDate {
+                return lhs.publishDate > rhs.publishDate
+            }
+            return lhs.videoID < rhs.videoID
+        }
+    }
+
+    private func shouldQueueAutoDownloadForDiscoveredEpisodes(
+        in channel: Channel,
+        context: RefreshContext
+    ) -> Bool {
+        guard context == .scheduled else { return false }
+        guard channel.sourceKind == .collection else { return false }
+        return channel.hasCompletedInitialImport
+    }
+
+    private func markInitialImportCompletedIfNeeded(for channel: Channel) {
+        guard channel.sourceKind == .collection, !channel.hasCompletedInitialImport else { return }
+        guard let index = channels.firstIndex(where: { $0.id == channel.id }) else { return }
+        channels[index].hasCompletedInitialImport = true
     }
 
     private func canMergeSingleEpisodeSource(at episodeIndex: Int, into channel: Channel) -> Bool {
