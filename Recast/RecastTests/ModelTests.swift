@@ -17,6 +17,7 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(ep.title, "Test Video")
         XCTAssertNil(ep.fileName)
         XCTAssertFalse(ep.isDownloaded)
+        XCTAssertEqual(ep.metadataSource, .exact)
         XCTAssertFalse(ep.isPlayed)
         XCTAssertFalse(ep.isNew)
         XCTAssertFalse(ep.isPendingAutoDownload)
@@ -136,6 +137,7 @@ final class ModelTests: XCTestCase {
         let ep = try JSONDecoder().decode(Episode.self, from: data)
         XCTAssertFalse(ep.isPendingAutoDownload)
         XCTAssertNil(ep.lastAutoDownloadAttemptAt)
+        XCTAssertEqual(ep.metadataSource, .legacy)
     }
 
     func testEpisodeDecodesWithPendingAutoDownload() throws {
@@ -181,6 +183,7 @@ final class ModelTests: XCTestCase {
             publishDate: Date(timeIntervalSince1970: 1000), durationSeconds: 600
         )
         ep.isPlayed = true
+        ep.metadataSource = .collectionListing
         ep.fileName = "rt1.mp3"
         ep.isNew = true
         ep.isPendingAutoDownload = true
@@ -194,6 +197,7 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(decoded.isNew, true)
         XCTAssertEqual(decoded.isPendingAutoDownload, true)
         XCTAssertEqual(decoded.fileName, "rt1.mp3")
+        XCTAssertEqual(decoded.metadataSource, .collectionListing)
         XCTAssertEqual(decoded.lastAutoDownloadAttemptAt, ep.lastAutoDownloadAttemptAt)
     }
 
@@ -266,22 +270,31 @@ final class ModelTests: XCTestCase {
         XCTAssertTrue(decoded.hasCompletedInitialImport)
     }
 
-    func testPublishedDate_prefersUploadDate() {
+    func testPublishedDate_prefersReleaseTimestampOverOtherMetadata() {
+        let date = Downloader.publishedDate(
+            uploadDate: "20260329",
+            timestamp: "1743206400",
+            releaseTimestamp: "1775924628"
+        )
+        XCTAssertEqual(Episode.fileDatePrefix(for: date), "2026-04-11")
+    }
+
+    func testPublishedDate_prefersTimestampOverUploadDate() {
         let date = Downloader.publishedDate(
             uploadDate: "20260329",
             timestamp: "1743206400",
             releaseTimestamp: ""
         )
-        XCTAssertEqual(Episode.fileDatePrefix(for: date), "2026-03-29")
+        XCTAssertEqual(Episode.fileDatePrefix(for: date), "2025-03-29")
     }
 
-    func testPublishedDate_fallsBackToTimestamp() {
+    func testPublishedDate_fallsBackToUploadDate() {
         let date = Downloader.publishedDate(
-            uploadDate: "",
-            timestamp: "1743206400",
+            uploadDate: "20260329",
+            timestamp: "",
             releaseTimestamp: ""
         )
-        XCTAssertEqual(Episode.fileDatePrefix(for: date), "2025-03-29")
+        XCTAssertEqual(Episode.fileDatePrefix(for: date), "2026-03-29")
     }
 
     func testParseVideoListOutput_parsesCompleteRows() {
@@ -295,7 +308,7 @@ final class ModelTests: XCTestCase {
         XCTAssertEqual(videos.count, 2)
         XCTAssertEqual(videos[0].videoID, "abc123")
         XCTAssertEqual(videos[0].title, "Episode One")
-        XCTAssertEqual(Episode.fileDatePrefix(for: videos[0].publishDate), "2026-03-29")
+        XCTAssertEqual(Episode.fileDatePrefix(for: videos[0].publishDate), "2025-03-29")
         XCTAssertEqual(videos[1].videoID, "def456")
         XCTAssertEqual(videos[1].durationSeconds, 125)
     }

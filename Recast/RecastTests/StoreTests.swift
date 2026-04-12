@@ -48,26 +48,38 @@ final class StoreTests: XCTestCase {
         Channel(url: "https://www.youtube.com/@\(urlHandle)/videos", name: name)
     }
 
-    private func makeEpisode(channelID: UUID, videoID: String, daysAgo: Int = 0, fileName: String? = nil) -> Episode {
+    private func makeEpisode(
+        channelID: UUID,
+        videoID: String,
+        daysAgo: Int = 0,
+        fileName: String? = nil,
+        metadataSource: EpisodeMetadataSource = .exact
+    ) -> Episode {
         let date = Calendar.current.date(byAdding: .day, value: -daysAgo, to: Date())!
         var ep = Episode(
             channelID: channelID,
             videoID: videoID,
             title: videoID,
             publishDate: date,
-            durationSeconds: 120
+            durationSeconds: 120,
+            metadataSource: metadataSource
         )
         ep.fileName = fileName
         return ep
     }
 
-    private func makeVideoInfo(videoID: String, daysAgo: Int = 0) -> Downloader.VideoInfo {
+    private func makeVideoInfo(
+        videoID: String,
+        daysAgo: Int = 0,
+        title: String? = nil,
+        durationSeconds: Int = 120
+    ) -> Downloader.VideoInfo {
         let publishDate = Calendar.current.date(byAdding: .day, value: -daysAgo, to: Date())!
         return Downloader.VideoInfo(
             videoID: videoID,
-            title: videoID,
+            title: title ?? videoID,
             publishDate: publishDate,
-            durationSeconds: 120
+            durationSeconds: durationSeconds
         )
     }
 
@@ -733,6 +745,7 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(store.channels[0].name, resolvedName)
         XCTAssertTrue(store.channels[0].hasCompletedInitialImport)
         XCTAssertEqual(Set(store.episodes.map(\.videoID)), Set(["fresh0", "fresh1"]))
+        XCTAssertTrue(store.episodes.allSatisfy { $0.metadataSource == .collectionListing })
         XCTAssertTrue(store.episodes.allSatisfy(\.isNew))
         XCTAssertTrue(store.episodes.allSatisfy { !$0.isPendingAutoDownload })
     }
@@ -805,6 +818,182 @@ final class StoreTests: XCTestCase {
         let scheduledEpisode = try! XCTUnwrap(store.episodes.first(where: { $0.videoID == "new-scheduled" }))
         XCTAssertTrue(scheduledEpisode.isNew)
         XCTAssertTrue(scheduledEpisode.isPendingAutoDownload)
+    }
+
+    func test_fetchNewEpisodes_preservesExactMetadataForExistingCollectionEpisode() async {
+        let channel = Channel(
+            url: "https://www.youtube.com/@science/videos",
+            name: "Science",
+            hasCompletedInitialImport: true
+        )
+        var existingEpisode = Episode(
+            channelID: channel.id,
+            videoID: "existing",
+            title: "Exact Title",
+            publishDate: Date(timeIntervalSince1970: 1_000),
+            durationSeconds: 120,
+            metadataSource: .exact
+        )
+        existingEpisode.isNew = true
+
+        store = AppStore(
+            stateFileURL: tempStateFile,
+            appSupportURL: tempAppSupportDir,
+            defaultEpisodesDirectory: defaultEpisodesDir,
+            shouldLoadPersistentState: false,
+            autoCheckDependencies: false,
+            listVideosOverride: { _, _ in
+                [
+                    Downloader.VideoInfo(
+                        videoID: "existing",
+                        title: "Approximate Title",
+                        publishDate: Date(timeIntervalSince1970: 2_000),
+                        durationSeconds: 240
+                    )
+                ]
+            }
+        )
+        store.episodesDirectory = tempDir
+        store.channels = [channel]
+        store.episodes = [existingEpisode]
+
+        let didComplete = await store.fetchNewEpisodes(for: [channel.id], context: .manual)
+
+        XCTAssertTrue(didComplete)
+        let refreshedEpisode = try! XCTUnwrap(store.episodes.first(where: { $0.videoID == "existing" }))
+        XCTAssertEqual(refreshedEpisode.title, "Exact Title")
+        XCTAssertEqual(refreshedEpisode.publishDate, Date(timeIntervalSince1970: 1_000))
+        XCTAssertEqual(refreshedEpisode.durationSeconds, 120)
+        XCTAssertEqual(refreshedEpisode.metadataSource, .exact)
+        XCTAssertFalse(refreshedEpisode.isNew)
+    }
+
+    func test_fetchNewEpisodes_repairsDownloadedApproximateEpisodeWithExactMetadataAndRegeneratesFeed() async throws {
+        let channel = Channel(
+            url: "https://www.youtube.com/@science/videos",
+            name: "Science",
+            hasCompletedInitialImport: true
+        )
+        let relativePath = Paths.relativeEpisodePath(forFileName: "existing.mp3", in: channel)
+        _ = try createDownloadedEpisodeFile(named: relativePath)
+        var existingEpisode = Episode(
+            channelID: channel.id,
+            videoID: "existing",
+            title: "Approximate Title",
+            publishDate: Date(timeIntervalSince1970: 1_000),
+            durationSeconds: 120,
+            metadataSource: .collectionListing
+        )
+        existingEpisode.fileName = relativePath
+
+        let exactVideo = Downloader.VideoInfo(
+            videoID: "existing",
+            title: "Exact Title",
+            publishDate: Date(timeIntervalSince1970: 2_000),
+            durationSeconds: 240
+        )
+
+        store = AppStore(
+            stateFileURL: tempStateFile,
+            appSupportURL: tempAppSupportDir,
+            defaultEpisodesDirectory: defaultEpisodesDir,
+            shouldLoadPersistentState: false,
+            autoCheckDependencies: false,
+            resolveVideoSourceOverride: { _ in
+                Downloader.ResolvedVideoSource(
+                    video: exactVideo,
+                    channelName: channel.name,
+                    collectionURL: channel.url
+                )
+            },
+            listVideosOverride: { _, _ in
+                [
+                    self.makeVideoInfo(
+                        videoID: "existing",
+                        daysAgo: 0,
+                        title: "Approximate Title",
+                        durationSeconds: 120
+                    )
+                ]
+            }
+        )
+        store.episodesDirectory = tempDir
+        store.channels = [channel]
+        store.episodes = [existingEpisode]
+        store.regenerateFeed()
+
+        let initialFeed = try String(contentsOf: Paths.feedFileURL(in: feedDir), encoding: .utf8)
+        XCTAssertTrue(initialFeed.contains("Approximate Title"))
+
+        let didComplete = await store.fetchNewEpisodes(for: [channel.id], context: .manual)
+
+        XCTAssertTrue(didComplete)
+        let refreshedEpisode = try XCTUnwrap(store.episodes.first(where: { $0.videoID == "existing" }))
+        XCTAssertEqual(refreshedEpisode.title, "Exact Title")
+        XCTAssertEqual(refreshedEpisode.publishDate, Date(timeIntervalSince1970: 2_000))
+        XCTAssertEqual(refreshedEpisode.durationSeconds, 240)
+        XCTAssertEqual(refreshedEpisode.metadataSource, .exact)
+
+        let regeneratedFeed = try String(contentsOf: Paths.feedFileURL(in: feedDir), encoding: .utf8)
+        XCTAssertTrue(regeneratedFeed.contains("Exact Title"))
+        XCTAssertFalse(regeneratedFeed.contains("Approximate Title"))
+    }
+
+    func test_fetchNewEpisodes_preservesDownloadedMetadataWhenExactRepairFails() async throws {
+        let channel = Channel(
+            url: "https://www.youtube.com/@science/videos",
+            name: "Science",
+            hasCompletedInitialImport: true
+        )
+        let relativePath = Paths.relativeEpisodePath(forFileName: "existing.mp3", in: channel)
+        _ = try createDownloadedEpisodeFile(named: relativePath)
+        var existingEpisode = Episode(
+            channelID: channel.id,
+            videoID: "existing",
+            title: "Stored Title",
+            publishDate: Date(timeIntervalSince1970: 1_000),
+            durationSeconds: 120,
+            metadataSource: .collectionListing
+        )
+        existingEpisode.fileName = relativePath
+
+        store = AppStore(
+            stateFileURL: tempStateFile,
+            appSupportURL: tempAppSupportDir,
+            defaultEpisodesDirectory: defaultEpisodesDir,
+            shouldLoadPersistentState: false,
+            autoCheckDependencies: false,
+            resolveVideoSourceOverride: { _ in
+                throw DownloaderError.parseError
+            },
+            listVideosOverride: { _, _ in
+                [
+                    self.makeVideoInfo(
+                        videoID: "existing",
+                        daysAgo: 0,
+                        title: "Approximate Title",
+                        durationSeconds: 240
+                    )
+                ]
+            }
+        )
+        store.episodesDirectory = tempDir
+        store.channels = [channel]
+        store.episodes = [existingEpisode]
+        store.regenerateFeed()
+
+        let didComplete = await store.fetchNewEpisodes(for: [channel.id], context: .manual)
+
+        XCTAssertTrue(didComplete)
+        let refreshedEpisode = try XCTUnwrap(store.episodes.first(where: { $0.videoID == "existing" }))
+        XCTAssertEqual(refreshedEpisode.title, "Stored Title")
+        XCTAssertEqual(refreshedEpisode.publishDate, Date(timeIntervalSince1970: 1_000))
+        XCTAssertEqual(refreshedEpisode.durationSeconds, 120)
+        XCTAssertEqual(refreshedEpisode.metadataSource, .collectionListing)
+
+        let feedContent = try String(contentsOf: Paths.feedFileURL(in: feedDir), encoding: .utf8)
+        XCTAssertTrue(feedContent.contains("Stored Title"))
+        XCTAssertFalse(feedContent.contains("Approximate Title"))
     }
 
     func test_hasPendingDownloads_tracksQueuedStatuses() {

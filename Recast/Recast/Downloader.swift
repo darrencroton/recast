@@ -569,14 +569,15 @@ actor Downloader {
     }
 
     static func publishedDate(uploadDate: String, timestamp: String, releaseTimestamp: String) -> Date {
-        if let uploadDate = parseUploadDate(uploadDate) {
-            return uploadDate
+        // Prefer exact timestamps so same-day uploads retain a stable newest-first order in the feed.
+        if let releaseDate = parseUnixTimestamp(releaseTimestamp) {
+            return releaseDate
         }
         if let timestampDate = parseUnixTimestamp(timestamp) {
             return timestampDate
         }
-        if let releaseDate = parseUnixTimestamp(releaseTimestamp) {
-            return releaseDate
+        if let uploadDate = parseUploadDate(uploadDate) {
+            return uploadDate
         }
         return .now
     }

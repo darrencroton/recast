@@ -131,6 +131,12 @@ struct Channel: Identifiable, Codable, Hashable {
     }
 }
 
+enum EpisodeMetadataSource: String, Codable, Hashable {
+    case exact
+    case collectionListing
+    case legacy
+}
+
 struct Episode: Identifiable, Codable, Hashable {
     var id: UUID
     var channelID: UUID
@@ -138,6 +144,7 @@ struct Episode: Identifiable, Codable, Hashable {
     var title: String
     var publishDate: Date
     var durationSeconds: Int
+    var metadataSource: EpisodeMetadataSource
     var fileName: String?
     var isPlayed: Bool
     var isNew: Bool
@@ -146,13 +153,21 @@ struct Episode: Identifiable, Codable, Hashable {
 
     var isDownloaded: Bool { fileName != nil }
 
-    init(channelID: UUID, videoID: String, title: String, publishDate: Date, durationSeconds: Int) {
+    init(
+        channelID: UUID,
+        videoID: String,
+        title: String,
+        publishDate: Date,
+        durationSeconds: Int,
+        metadataSource: EpisodeMetadataSource = .exact
+    ) {
         self.id = UUID()
         self.channelID = channelID
         self.videoID = videoID
         self.title = title
         self.publishDate = publishDate
         self.durationSeconds = durationSeconds
+        self.metadataSource = metadataSource
         self.isPlayed = false
         self.isNew = false
         self.isPendingAutoDownload = false
@@ -166,6 +181,7 @@ struct Episode: Identifiable, Codable, Hashable {
         case title
         case publishDate
         case durationSeconds
+        case metadataSource
         case fileName
         case isPlayed
         case isNew
@@ -181,6 +197,7 @@ struct Episode: Identifiable, Codable, Hashable {
         title = try container.decode(String.self, forKey: .title)
         publishDate = try container.decode(Date.self, forKey: .publishDate)
         durationSeconds = try container.decode(Int.self, forKey: .durationSeconds)
+        metadataSource = try container.decodeIfPresent(EpisodeMetadataSource.self, forKey: .metadataSource) ?? .legacy
         fileName = try container.decodeIfPresent(String.self, forKey: .fileName)
         isPlayed = try container.decodeIfPresent(Bool.self, forKey: .isPlayed) ?? false
         isNew = try container.decodeIfPresent(Bool.self, forKey: .isNew) ?? false
@@ -196,6 +213,7 @@ struct Episode: Identifiable, Codable, Hashable {
         try container.encode(title, forKey: .title)
         try container.encode(publishDate, forKey: .publishDate)
         try container.encode(durationSeconds, forKey: .durationSeconds)
+        try container.encode(metadataSource, forKey: .metadataSource)
         try container.encodeIfPresent(fileName, forKey: .fileName)
         try container.encode(isPlayed, forKey: .isPlayed)
         try container.encode(isNew, forKey: .isNew)

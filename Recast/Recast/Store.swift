@@ -18,6 +18,12 @@ final class AppStore {
         case singleVideo(url: String, videoID: String)
     }
 
+    private struct FetchedVideoResult {
+        var isNewEpisode = false
+        var needsExactMetadataRefresh = false
+        var didChangeFeed = false
+    }
+
     enum RefreshContext {
         case initialImport
         case manual
@@ -349,7 +355,8 @@ final class AppStore {
                     resolvedVideo.video,
                     to: existingCollection.id,
                     markAsNew: false,
-                    markPendingAutoDownload: false
+                    markPendingAutoDownload: false,
+                    metadataSource: .exact
                 )
                 save()
                 statusMessage = "Added episode to \(existingCollection.name)"
@@ -378,7 +385,8 @@ final class AppStore {
                 resolvedVideo.video,
                 to: channel.id,
                 markAsNew: false,
-                markPendingAutoDownload: false
+                markPendingAutoDownload: false,
+                metadataSource: .exact
             )
             save()
             statusMessage = "Added episode from \(sourceName)"
@@ -429,6 +437,7 @@ final class AppStore {
         var totalNew = 0
         var fetchErrors: [String] = []
         var wasCancelled = false
+        var shouldRegenerateFeed = false
         AppLogger.info("Starting fetch for \(targets.count) source(s)", category: "fetch")
 
         for channel in targets {
@@ -453,13 +462,22 @@ final class AppStore {
                 )
 
                 for video in videos {
-                    if handleFetchedVideo(
+                    let result = handleFetchedVideo(
                         video,
+                        metadataSource: channel.sourceKind == .collection ? .collectionListing : .exact,
                         for: channel,
                         markPendingAutoDownload: shouldQueueAutoDownload
-                    ) {
+                    )
+                    if result.isNewEpisode {
                         totalNew += 1
                     }
+                    if result.needsExactMetadataRefresh {
+                        shouldRegenerateFeed = await refreshDownloadedEpisodeMetadataExactly(
+                            forVideoID: video.videoID,
+                            category: "fetch"
+                        ) || shouldRegenerateFeed
+                    }
+                    shouldRegenerateFeed = shouldRegenerateFeed || result.didChangeFeed
                 }
 
                 markInitialImportCompletedIfNeeded(for: channel)
@@ -479,6 +497,9 @@ final class AppStore {
         pruneEmptySingleEpisodeSources()
         guard isCurrentOperation(operationToken) else { return false }
         save()
+        if shouldRegenerateFeed {
+            regenerateFeed()
+        }
         if wasCancelled {
             statusMessage = totalNew > 0
                 ? "Stopped refresh after finding \(totalNew) new episode(s)"
@@ -524,19 +545,45 @@ final class AppStore {
         }
         let episodesDir = Paths.ensureManagedChannelEpisodesDirectory(for: channel, in: episodesDirectory)
         let videoID = currentEpisode.videoID
+        var episodeForDownload = currentEpisode
+
+        if exactMetadataRefreshNeeded(for: currentEpisode) {
+            do {
+                let exactVideo = try await resolvedExactVideoInfo(for: currentEpisode.videoID)
+                guard isCurrentOperation(operationToken) else { return }
+                if let refreshedIndex = episodes.firstIndex(where: { $0.videoID == currentEpisode.videoID }) {
+                    _ = applyEpisodeMetadata(
+                        at: refreshedIndex,
+                        using: exactVideo,
+                        metadataSource: .exact
+                    )
+                    episodeForDownload = episodes[refreshedIndex]
+                    AppLogger.info(
+                        "Refreshed exact metadata before download for \(currentEpisode.videoID)",
+                        category: "download"
+                    )
+                }
+            } catch {
+                guard isCurrentOperation(operationToken) else { return }
+                AppLogger.warning(
+                    "Using existing metadata for \(currentEpisode.videoID): \(error.localizedDescription)",
+                    category: "download"
+                )
+            }
+        }
 
         activeDownloads.insert(videoID)
         activeDownloadStatus[videoID] = DownloadStatus(progress: 0, phase: .preparing)
         isStoppingDownloads = false
-        statusMessage = "Downloading: \(currentEpisode.title.prefix(50))…"
+        statusMessage = "Downloading: \(episodeForDownload.title.prefix(50))…"
         AppLogger.info(
-            "Downloading episode \(currentEpisode.videoID) as \(currentEpisode.suggestedFileName)",
+            "Downloading episode \(episodeForDownload.videoID) as \(episodeForDownload.suggestedFileName)",
             category: "download"
         )
 
         do {
             let fileName = try await downloader.downloadAudio(
-                episode: currentEpisode,
+                episode: episodeForDownload,
                 to: episodesDir
             ) { [weak self] update in
                 Task { @MainActor [weak self, videoID, operationToken] in
@@ -551,18 +598,19 @@ final class AppStore {
             let relativePath = Paths.relativeEpisodePath(forFileName: fileName, in: channel)
             if let idx = episodes.firstIndex(where: { $0.videoID == videoID }) {
                 episodes[idx].fileName = relativePath
+                episodes[idx].metadataSource = .exact
                 episodes[idx].isPendingAutoDownload = false
                 episodes[idx].lastAutoDownloadAttemptAt = nil
             }
-            statusMessage = "Downloaded: \(currentEpisode.title.prefix(50))"
+            statusMessage = "Downloaded: \(episodeForDownload.title.prefix(50))"
             AppLogger.info("Downloaded episode \(currentEpisode.videoID) to \(relativePath)", category: "download")
         } catch DownloaderError.cancelled {
             guard isCurrentOperation(operationToken) else { return }
-            statusMessage = "Stopped: \(currentEpisode.title.prefix(50))"
+            statusMessage = "Stopped: \(episodeForDownload.title.prefix(50))"
             AppLogger.info("Stopped download for \(currentEpisode.videoID)", category: "download")
         } catch {
             guard isCurrentOperation(operationToken) else { return }
-            statusMessage = "Failed: \(currentEpisode.title.prefix(40)) — \(error.localizedDescription)"
+            statusMessage = "Failed: \(episodeForDownload.title.prefix(40)) — \(error.localizedDescription)"
             AppLogger.error("Download failed for \(currentEpisode.videoID): \(error.localizedDescription)", category: "download")
         }
 
@@ -1191,35 +1239,50 @@ final class AppStore {
 
     private func handleFetchedVideo(
         _ video: Downloader.VideoInfo,
+        metadataSource: EpisodeMetadataSource,
         for channel: Channel,
         markPendingAutoDownload: Bool
-    ) -> Bool {
+    ) -> FetchedVideoResult {
         if let existingIndex = episodes.firstIndex(where: { $0.videoID == video.videoID }) {
+            var result = FetchedVideoResult()
+            if metadataSource == .exact {
+                result.didChangeFeed = applyEpisodeMetadata(
+                    at: existingIndex,
+                    using: video,
+                    metadataSource: .exact
+                )
+            } else if exactMetadataRefreshNeeded(for: episodes[existingIndex]) {
+                result.needsExactMetadataRefresh = true
+            }
+
             if episodes[existingIndex].channelID == channel.id {
-                return false
+                return result
             }
 
             if canMergeSingleEpisodeSource(at: existingIndex, into: channel) {
                 episodes[existingIndex].channelID = channel.id
                 pruneEmptySingleEpisodeSources()
+                result.didChangeFeed = true
             }
-            return false
+            return result
         }
 
         appendEpisodeIfNeeded(
             video,
             to: channel.id,
             markAsNew: true,
-            markPendingAutoDownload: markPendingAutoDownload
+            markPendingAutoDownload: markPendingAutoDownload,
+            metadataSource: metadataSource
         )
-        return true
+        return FetchedVideoResult(isNewEpisode: true)
     }
 
     private func appendEpisodeIfNeeded(
         _ video: Downloader.VideoInfo,
         to channelID: UUID,
         markAsNew: Bool,
-        markPendingAutoDownload: Bool
+        markPendingAutoDownload: Bool,
+        metadataSource: EpisodeMetadataSource
     ) {
         guard !episodes.contains(where: { $0.videoID == video.videoID }) else { return }
         var episode = Episode(
@@ -1227,11 +1290,68 @@ final class AppStore {
             videoID: video.videoID,
             title: video.title,
             publishDate: video.publishDate,
-            durationSeconds: video.durationSeconds
+            durationSeconds: video.durationSeconds,
+            metadataSource: metadataSource
         )
         episode.isNew = markAsNew
         episode.isPendingAutoDownload = markPendingAutoDownload
         episodes.append(episode)
+    }
+
+    private func applyEpisodeMetadata(
+        at index: Int,
+        using video: Downloader.VideoInfo,
+        metadataSource: EpisodeMetadataSource
+    ) -> Bool {
+        let didChangeFeedVisibleMetadata =
+            episodes[index].title != video.title ||
+            episodes[index].publishDate != video.publishDate ||
+            episodes[index].durationSeconds != video.durationSeconds
+        episodes[index].title = video.title
+        episodes[index].publishDate = video.publishDate
+        episodes[index].durationSeconds = video.durationSeconds
+        episodes[index].metadataSource = metadataSource
+        return episodes[index].isDownloaded && didChangeFeedVisibleMetadata
+    }
+
+    private func exactMetadataRefreshNeeded(for episode: Episode) -> Bool {
+        episode.isDownloaded && episode.metadataSource != .exact
+    }
+
+    private func resolvedExactVideoInfo(for videoID: String) async throws -> Downloader.VideoInfo {
+        let resolved = try await resolveVideoSource(for: "https://www.youtube.com/watch?v=\(videoID)")
+        guard resolved.video.videoID == videoID else { throw DownloaderError.parseError }
+        return resolved.video
+    }
+
+    private func refreshDownloadedEpisodeMetadataExactly(
+        forVideoID videoID: String,
+        category: String
+    ) async -> Bool {
+        guard let currentIndex = episodes.firstIndex(where: { $0.videoID == videoID }),
+              exactMetadataRefreshNeeded(for: episodes[currentIndex]) else {
+            return false
+        }
+
+        do {
+            let exactVideo = try await resolvedExactVideoInfo(for: videoID)
+            guard let refreshedIndex = episodes.firstIndex(where: { $0.videoID == videoID }) else {
+                return false
+            }
+            let didChangeFeed = applyEpisodeMetadata(
+                at: refreshedIndex,
+                using: exactVideo,
+                metadataSource: .exact
+            )
+            AppLogger.info("Refreshed exact metadata for \(videoID)", category: category)
+            return didChangeFeed
+        } catch {
+            AppLogger.warning(
+                "Skipped exact metadata refresh for \(videoID): \(error.localizedDescription)",
+                category: category
+            )
+            return false
+        }
     }
 
     func recordAutoDownloadAttempt(for targets: [Episode]) {
